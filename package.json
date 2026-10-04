@@ -3,13 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "description": "Source-grounded multi-agent research workspace",
-  "workspaces": ["apps/server", "apps/web"],
+  "workspaces": [
+    "apps/server",
+    "apps/web"
+  ],
   "scripts": {
     "dev": "concurrently -k -n api,web -c gray,white \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm --workspace @reasona/server run dev",
     "dev:web": "npm --workspace @reasona/web run dev",
     "build": "npm run build --workspace @reasona/server && npm run build --workspace @reasona/web",
-    "test": "npm run test --workspace @reasona/server",
+    "test": "npm run test --workspace @reasona/server && npm run test --workspace @reasona/web",
     "typecheck": "npm run typecheck --workspace @reasona/server && npm run typecheck --workspace @reasona/web",
     "start": "npm --workspace @reasona/server start"
   },

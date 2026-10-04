@@ -1,41 +1,48 @@
 # Reasona AI Agent
 
-Reasona 是一個**尚待使用者與市場驗證**的來源密集研究／短報告多代理工作流原型。模型與流程附件只作研究參考；不構成已驗證的市場事實、模型選定、效能保證或使用者需求證據。
+Reasona 是一個**尚待使用者與市場驗證**的來源密集研究工作台原型。附件中的模型、框架與流程文件是候選參考，不是已驗證市場事實、模型品質保證或最終架構決定。
 
-> **公開 GitHub Pages 目前只部署靜態前端。**沒有 SQLite、API、Google 登入、來源擷取或 AI runner。輸入、對話、Agent、核准和刪除操作在公開頁面停用；頁面不會儲存輸入、呼叫模型或生成示範性答案。
+> **目前公開網站是靜態前端，AI 推理選項在瀏覽器本機執行。**GitHub Pages 不提供本專案的 Node API、SQLite、Google 登入、排程、server-side runner 或網路來源檢索。使用者必須自行點選載入模型；沒有 WebGPU 時不會退回雲端服務。
 
-## 公開預覽
+## 工作台與安全邊界
 
-<https://xiaoyu0712-beep.github.io/Reasona-AI-Agent/>
+- 黑／白／灰、高對比圓角玻璃 UI；使用新附件提供的 12 張 PNG；支援鍵盤焦點、長文閱讀、窄螢幕及 `prefers-reduced-motion`。
+- 對話、個人 Agent、任務、群聊訊息、來源片段、claims、任務事件及稽核 metadata 存在**目前瀏覽器 IndexedDB**。不同對話以 ID 隔離；沒有雲端同步或登入。新任務會保存所選 Agent 設定快照。
+- 任務狀態使用 `queued`、`running`、`waiting for user`、`completed`、`failed`、`cancelled`。任務階段來自實際本機模型步驟；不顯示虛構百分比或預製代理回報。
+- Planner、Researcher、Reviewer 是**同一個本機模型依序生成的角色視角**，不是三個獨立 agent process、容器或不同模型。群聊內容只在模型實際返回後記錄。可取消生成；異常會顯示錯誤與任務事件。
+- 網路搜尋和網址擷取未接通。使用者要先手動閱讀來源、貼入原文片段與 URL；每個非不確定性候選 claim 都要附上存在的 evidence ID，並由使用者開啟原文逐項核對。Schema 驗證能阻擋不存在的 evidence ID，**不能證明文字在語義上受來源支持**。未核對的模型主張都清楚標為候選。
+- 空來源情況不會用模型記憶補成研究事實；模型輸出格式錯誤或 evidence ID 無效時，不會建立 claim，而是停在 `waiting for user`。
+- 對話、Agent 與 Reasona IndexedDB 工作區資料的刪除都會先說明範圍並要求確認；清除工作區不會刪除瀏覽器 Cache API 中的模型權重，需從瀏覽器網站資料設定另行清除。沒有分享、公開發布、付款或其他外部工具執行器；外部操作目前不可能從此頁發生。稽核記錄只存動作 metadata，不複製對話正文。
+- 排程目前是空狀態；沒有 scheduler/worker。Google OAuth 只有未部署的 server-side 安全佔位，沒有建立 OAuth client、同意畫面或正式登入。
 
-GitHub Actions 只把 `apps/web/dist` 發佈到 Pages；不會部署 Node server 或 SQLite。即使頁面上的視覺展示 12 張素材，角色與流程插圖也**不代表即時任務進度或真的代理活動**。
+## 本機模型候選（明確點選才載入）
 
-## 已實作的工作區／後端程式碼（尚未部署）
+工作台整合 `@mlc-ai/web-llm` 作為**瀏覽器端 runtime**，候選模型為 `Qwen3-0.6B-q4f16_1-MLC`。這不是下載進 GitHub Pages 或 repository：使用者按「載入本機模型」後才會從固定的 Hugging Face revision 下載約 **351,517,143 bytes（約 335 MiB）**權重，並載入 WebLLM runtime 的模型 WebGPU library。模型在相容瀏覽器的 GPU 上推理；WebLLM 型錄估算約 **1.4 GiB VRAM**，實際需求依瀏覽器、GPU、驅動與可用記憶體而異。瀏覽器 Cache API 可快取模型檔案。
 
-- React 19、TypeScript、Vite 研究工作台；黑白灰圓角玻璃風格、窄螢幕排版、鍵盤焦點與 reduced-motion。
-- Express 5 TypeScript API、SQLite schema 與 owner-scoped 對話、Agent、任務、子任務、來源、evidence、claim、approval、事件與稽核資料。
-- 真實狀態採 `queued`、`running`、`waiting for user`、`completed`、`failed`、`cancelled`。目前無 runner；任務不能偽裝為 `running`，前端不顯示假百分比。
-- 每個任務可保留建立時的個人 Agent 版本快照；群聊只顯示實際持久化訊息，沒有模型時不會產生假代理回報。
-- Claim 可連到具體來源 URL 與人工提供的 evidence span；區分來源直接支持、跨來源綜合、不確定性／證據缺口。新增資料預設未經核查，僅登錄 URL 不等於來源已支持 claim。
-- 外部操作 approval 顯示精確動作、payload、SHA-256 與期限；核准／拒絕要求明確確認並留 audit event。此版沒有外部執行器，核准不會寄送、發布或改變外部狀態。對話刪除會先展示完整資料範圍並要求確認。
-- 稽核紀錄與 owner isolation 在 API/database 層實作；Google OIDC 僅為 server-side 安全邊界與環境佔位，沒有建立 Google Cloud OAuth 用戶端、同意畫面或真實登入。
+- 必須使用 HTTPS（GitHub Pages 符合 secure-context 條件）、具 WebGPU 支援的瀏覽器及相容 GPU。若不支援，模型載入與研究執行會保持停用。
+- 對話提示與推理內容留在本機瀏覽器，不傳到模型 API；模型權重／library 資產仍須透過 Hugging Face 與 WebLLM 上游檔案服務下載。首次載入可能耗時並使用數百 MiB 網路流量。
+- Qwen3 base model card 標示 Apache-2.0；目前 MLC 量化權重 repository 本身未提供獨立 license metadata。Reasona 不重新散布權重；正式或商業用途前須另行確認衍生權重授權和使用政策。0.6B 小模型的研究品質尚未在真實硬體或代表性任務上評測。
+- Sandbox 本次沒有 NVIDIA GPU/WebGPU 瀏覽器實測，故**無法宣稱模型已成功載入或實際推理已端到端驗證**。網頁的 WebGPU gate 與 model adapter 可建置、可測試；實際推理須在相容使用者裝置驗證。
 
-## 安裝狀態：預設套件、選用項目與未接通能力
+來源： [Qwen3-0.6B base model card](https://huggingface.co/Qwen/Qwen3-0.6B) · [MLC 量化模型 revision `8c14ce481d4c692769976ad52afea453a102df19`](https://huggingface.co/mlc-ai/Qwen3-0.6B-q4f16_1-MLC/tree/8c14ce481d4c692769976ad52afea453a102df19) · [固定 commit 的 MLC WebGPU library `025bcaf3780fa8254f5e5efd3bfea0a5397248f4`](https://github.com/mlc-ai/binary-mlc-llm-libs/tree/025bcaf3780fa8254f5e5efd3bfea0a5397248f4) · [WebLLM 文件](https://webllm.mlc.ai/docs/user/basic_usage.html) · [WebGPU secure-context／支援狀態](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API)。
 
-`npm ci` 依 `package-lock.json` 安裝此專案的鎖定依賴。與附件候選清單不同，**不會安裝 30+ 個 Agent 框架或 20 個以上工具整合**。
+## Repository 內實際預設安裝項目
 
-| 分類 | Repository 內預設安裝 | 實際狀態 |
+以 `npm ci` 依 `package-lock.json` 安裝。以下列出直接 dependencies；有版本範圍者，以 lockfile 的 resolved version 為準。
+
+| 分類 | 已安裝套件 | 實際狀態 |
 |---|---|---|
-| Agent runtime | Vercel AI SDK `ai@7.0.127`（Apache-2.0；符合附件對 TypeScript/Node 的單一 runtime 建議） | 已安裝於 server workspace，**目前未接入呼叫流程**；沒有 model/provider SDK、API key 或模型呼叫。套件安裝本身不連外呼叫服務。 |
-| Server/API | Express 5、Zod、`better-sqlite3@11.10.0`、dotenv、`google-auth-library@11.1.0` | 已安裝；僅有未部署的本機 API/OAuth 邊界及資料 schema，不代表雲端 API 或正式認證已啟用。 |
-| Web | React、React DOM、Vite、Lucide React | 已安裝；靜態建置僅公開 UI 與 PNG 素材。 |
-| 開發／測試 | TypeScript、tsx、concurrently 與型別套件 | 已安裝於相應 workspace；完整清單及鎖定版本以各 `package.json`、lockfile 為準。 |
+| 瀏覽器模型 | `@mlc-ai/web-llm@0.2.85` | 按使用者操作載入本機 Qwen3 MLC 模型；不含權重、不呼叫付費 API。 |
+| UI／確認 | `react@^19.1.0`、`react-dom@^19.1.0`、`vite@^6.3.5`、`tailwindcss@4.3.3`、`@tailwindcss/vite@4.3.3`、`@radix-ui/react-alert-dialog@1.1.23`、`lucide-react@^0.468.0` | React/Vite UI；Radix AlertDialog 用於刪除確認。沒有安裝 shadcn/ui、Headless UI 或 Mantine。 |
+| Node API 基礎 | `express@^5.1.0`、`zod@^3.25.28`、`better-sqlite3@11.10.0`、`google-auth-library@11.1.0`、`dotenv@^16.5.0` | 只有保留的 server workspace scaffold；**未部署到 Pages，靜態前端沒有呼叫這些 API**。 |
+| Agent SDK 候選 | `ai@7.0.127` | 安裝在 server workspace，尚未接入研究流程或 provider 呼叫。 |
+| 測試／開發 | `vitest@3.2.4`、TypeScript、`tsx`、`concurrently` 及其型別套件 | 對狀態／evidence parser、server 安全邏輯提供測試和建置。 |
 
-MCP SDK、其他 Agent runtime（例如 LangGraph、PydanticAI、AutoGen）、模型 provider SDK、瀏覽器自動化、shell、任意程式碼執行、向量資料庫、E2B/雲端 sandbox 與外部副作用工具**未預裝、未連接、未獲授權**。候選清單只列在 `docs/reference/`。若日後加入工具，須逐項設定白名單與權限，對瀏覽器、shell、MCP、程式碼執行、檔案存取和外部副作用採隔離、最小權限並要求適當的人為授權。
+以上不代表全部功能已接通。**沒有**預裝其他 Agent framework（LangGraph、CrewAI、PydanticAI 等）、MCP SDK/server、外部 provider SDK/key、Browser Use、shell、任意程式碼執行、E2B、雲端 sandbox、向量資料庫或付款插件。50 個分類候選收錄在參考文件，不是套件安裝清單。對瀏覽器、shell、MCP、程式碼執行、檔案系統或外部副作用工具，預設沒有存取權；將來接入時須隔離、逐項白名單、明確授權並對重要動作確認。
 
-## 本機開發（非公開 Pages 網站的 server）
+## 本機開發與測試
 
-需求為 Node.js 22+ 與 npm。從 repository 根目錄：
+需求：Node.js 22+、npm。
 
 ```bash
 npm ci
@@ -43,45 +50,41 @@ cp .env.example .env
 npm run dev
 ```
 
-前端開發伺服器位於 <http://127.0.0.1:5173>，API health 位於 <http://127.0.0.1:4000/api/health>。SQLite 預設位於 server workspace 的 `apps/server/data/reasona.sqlite`。API 僅綁定 loopback；`AUTH_MODE=local` 只供本機開發，絕不可直接暴露至網路或正式環境。
+- 本機 Vite UI：<http://127.0.0.1:5173>
+- API health scaffold：<http://127.0.0.1:4000/api/health>
+- SQLite 預設檔案：`apps/server/data/reasona.sqlite`
+- 預設 server host 僅 loopback；`AUTH_MODE=local` 只供本機開發。靜態 UI 使用 IndexedDB 和本機 WebGPU 模型，不連結 server API。
 
-本機檢查：
+完整驗證：
 
 ```bash
+npm ci
 npm run typecheck
 npm test
 npm run build
 ```
 
-如只要建置無後端的靜態預覽，可在 repository 根目錄執行：
+本機預覽 Pages production 前端：
 
 ```bash
-VITE_STATIC_PREVIEW=true npm run build --workspace @reasona/web
-npm run preview --workspace @reasona/web
+npm run build --workspace @reasona/web
+npm run preview --workspace @reasona/web -- --port 4173
 ```
 
-本機 preview URL 為 <http://127.0.0.1:4173/Reasona-AI-Agent/>；GitHub Pages workflow 也以靜態預覽模式建置。
+Vite preview 的專案路徑為 `/Reasona-AI-Agent/`。模型下載仍需使用者在頁面明確點選。
 
-## GitHub Pages 免費部署流程
+## GitHub Pages 部署
 
-`.github/workflows/deploy-pages.yml` 在 `main` 更新或手動觸發時會執行 `npm ci`、前後端 typecheck、測試、production build 及前端 bundle token-pattern guard；然後只上傳 `apps/web/dist`。此網站不包含 `.env`，也不從 GitHub Secrets 注入 API key。Pages URL：<https://xiaoyu0712-beep.github.io/Reasona-AI-Agent/>。
+`.github/workflows/deploy-pages.yml` 在 `main` 更新或手動觸發時執行 `npm ci`、typecheck、server 與 web tests、production build、前端 token-pattern guard，並只上傳 `apps/web/dist`。不部署 `apps/server`、SQLite、`.env` 或任何 secrets。GitHub Pages 僅供靜態前端，不可將本網站描述為雲端 Agent/API 服務。
 
-GitHub Pages 是靜態網站託管，不提供 SQLite/API/排程/worker；要讓後端成為服務，需另行選擇、審查與明確授權一個 server hosting 環境。**本次不部署後端，也不連接別的託管平台。**
+公開 URL（需由 repository Pages Actions 啟用）：<https://xiaoyu0712-beep.github.io/Reasona-AI-Agent/>。
 
-## Google OAuth（安全佔位，尚未設定）
+## Server 設定、安全佔位與未接通功能
 
-只有在使用者自行建立並核准 Google OAuth/OIDC 用戶端後，才可把 client ID、client secret 和精確 redirect URI 放到未提交的本機 `.env` 或核准部署平台的 server-only secret store。環境佔位名稱為 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REDIRECT_URI`、`APP_ORIGIN`；還需要 `AUTH_MODE=google` 及 `SESSION_SECRET`。請先設定 redirect URI、consent screen、測試使用者和 HTTPS/cookie/proxy 行為。不得把 OAuth secret 放入前端、Git、Pages workflow 或聊天。此 repository 沒有 Google 同意、登入或雲端 OAuth 設定。
+- `.env.example` 只有空白／安全範例。`MODEL_PROVIDER=none` 及 `RESEARCH_EXECUTION_ENABLED=false` 是預設值。server adapter 只有在使用者自行提供 server-only provider URL/model/key 並明確啟用後才可能呼叫；**靜態前端沒有連至該 adapter**，亦未因此驗證研究執行。
+- Google OAuth 的 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、redirect URI、`SESSION_SECRET` 只作設定佔位。沒有假稱已建立 Google Cloud client 或取得登入同意。secret 不可放在 frontend、Pages artifact 或 Git。
+- 還未接通：網路 source search/fetch/snapshot、發布或檢索工具、可信引用語義檢查、獨立代理 runtime/worker、API-backed UI sync、雲端 SQLite、排程、Google OAuth provider setup 和外部副作用工具。沒有這些能力就不會偽造搜尋結果、來源、代理執行回報或進度。
 
-## Model/provider（沒有預設模型）
+## 參考文件與素材
 
-附件模型比較與權重授權只供後續決策；目前尚無模型、API key、GPU、預算或 provider 授權。`.env.example` 將 `MODEL_PROVIDER=none`、研究執行停用。沒有自動付費 API fallback，也不會下載大型模型或購買資源。
-
-即使自行設定 server-side OpenAI-compatible adapter 的 URL/model/key，現有版本也**不會因此執行研究任務**：尚缺核准的模型選擇、source search/fetch/snapshot、來源 freshness 與衝突檢查、claim-evidence verifier、Agent planner/runner、持久工作佇列、工具沙箱和評測。不要單獨打開 feature flag 後把輸出當成已查證研究。金鑰只由 server process 讀取，永不進入 browser bundle。
-
-## 參考文件與視覺素材
-
-`docs/reference/` 保存使用者提供的開源 Agent／模型／技術／研究流程文件、`frameworks_30_5_15.md` 候選清單與 PNG manifest。這些文件包含日期、官方來源連結及安裝建議，使用前仍需回原始官方來源核驗；**沒有做市場研究或把候選視為已選型**。12 張新 PNG 位於 `apps/web/public/assets/reasona/`，以素材牆及角色／空狀態插圖顯示；manifest 說明其生成來源，草稿尚非品牌核准。
-
-## 目前明確未接通
-
-真實 AI runner、主 Agent 任務規劃與子代理分派／協作、來源網路搜尋／下載／擷取、報告自動撰寫、模型供應商、排程執行器、持久雲端 API/SQLite、Google OAuth、MCP／browser／shell／code execution、通知／發布／付款外部工具，皆未設定或部署。AI、引用和進度均不會造假。
+`docs/reference/` 保存四份模型／技術／Agent 生態／研究流程文件、使用者新附件 `frameworks_30_5_15.md`、來源封包 README、SHA-256 清單與素材 manifest。附件候選列表含 30 個 Agent 框架、5 個分派框架及 15 個工具框架，另列 UI 候選；**本專案只選擇少數相容元件，不把 50 個候選一併安裝或宣稱可用**。對附件 45 個上游 repository ZIP 已在隔離目錄靜態盤點 central directory 與有限 README／license／manifest metadata，但沒有解壓、安裝或執行專案原始碼，也沒有整包塞入 Git；逐項相容性報告尚在處理中，未完成前不宣稱已交付。12 張附件 PNG 在 `apps/web/public/assets/reasona/`，並以原始 SHA-256 與附件核對一致。

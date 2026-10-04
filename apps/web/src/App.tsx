@@ -1,287 +1,416 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Activity, Archive, ArrowDown, ArrowUpRight, Bot, Check, ChevronDown, CircleHelp, Clock3, FilePlus2, Layers3, LoaderCircle, LogOut, Menu, MessageSquareText, PanelLeftClose, Plus, Radio, RefreshCw, Search, Send, Settings2, ShieldCheck, Sparkles, Trash2, UserRound, UsersRound, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import * as AlertDialog from '@radix-ui/react-alert-dialog';
+import { Activity, ArrowDownRight, ArrowUpRight, BookOpenText, Check, ChevronDown, CircleHelp, Cpu, ExternalLink, FilePlus2, Layers3, LoaderCircle, LockKeyhole, Menu, MessageSquareText, Plus, Radio, Send, Settings2, ShieldCheck, Sparkles, Trash2, UsersRound, X } from 'lucide-react';
+import { autoTitle, parseReviewOutput, safeHttpUrl, transitionStatus, type TaskStatus } from './core';
+import { hasWebGPU, interruptLocalGeneration, loadLocalModel, MODEL_CARD_URL, MODEL_DISPLAY_NAME, MODEL_WEIGHT_BYTES, streamLocalCompletion, type MLCEngine } from './model';
+import { clearLocalDatabase, createInitialState, isoNow, loadState, newId, saveState, type AgentProfile, type AuditEvent, type ChatMessage, type ClaimRecord, type Conversation, type LocalAppState, type SourceRecord, type Task } from './store';
 
-type TaskStatus = 'queued' | 'running' | 'waiting for user' | 'completed' | 'failed' | 'cancelled';
-type Conversation = { id: string; title: string; title_edited: number; updated_at: string };
-type Agent = { id: string; name: string; role: string; description: string; instructions: string; version: number; allowed_sources?: string[] };
-type Task = { id: string; conversation_id: string; personal_agent_id?: string | null; personal_agent_snapshot?: { name: string; role: string; version: number } | null; prompt: string; title: string; status: TaskStatus; phase: string; blocked_reason: string | null; created_at: string; updated_at: string };
-type Event = { id: number; event_type: string; detail: string; phase: string; status: TaskStatus; created_at: string };
-type Message = { id: string; speaker_type: 'user' | 'agent' | 'system'; speaker_id?: string; body: string; created_at: string };
-type Source = { id: string; url: string; title: string; publisher?: string; published_at?: string; verification_status: string; evidence: Evidence[] };
-type Evidence = { id: string; sourceId: string; url: string; title: string; excerpt: string; locator?: string };
-type Claim = { id: string; kind: 'source_fact' | 'synthesis' | 'uncertainty'; text: string; verification_status: string; evidence: Evidence[] };
-type Subtask = { id: string; title: string; status: TaskStatus; phase: string; blocked_reason: string | null; agent_snapshot: { name: string; version: number } | null };
-type Approval = { id: string; action: string; payload: Record<string, unknown>; payload_hash: string; status: 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed'; expires_at: string; approved_at: string | null; created_at: string };
-type TaskDetail = { task: Task; events: Event[]; messages: Message[]; subtasks: Subtask[]; approvals: Approval[]; sources: Source[]; claims: Claim[] };
-type Schedule = { id: string; name: string; status: string; next_run_at: string | null; last_run_at: string | null; last_result: string | null; schedule_spec: string; timezone: string };
-type Readiness = { provider: { ready: boolean; provider: string; model: string | null; reason: string }; researchExecution: { ready: boolean; reason: string }; oauth: { configured: boolean; mode: string } };
-
-const STATIC_PREVIEW = import.meta.env.VITE_STATIC_PREVIEW === 'true';
 const ASSET_BASE = `${import.meta.env.BASE_URL}assets/reasona/`;
-const assetUrl = (file: string) => `${ASSET_BASE}${file}`;
-const referenceAssets = [
-  ['01_reasona_hero.png', 'Reasona 推理路徑', '研究流程主視覺'],
-  ['02_planner_avatar.png', 'Planner', '規劃與排序角色示意'],
-  ['03_researcher_avatar.png', 'Researcher', '來源研究角色示意'],
-  ['04_reviewer_avatar.png', 'Reviewer', '證據審閱角色示意'],
-  ['05_agent_collaboration_ui.png', '代理協作', '子代理群聊概念圖'],
-  ['06_source_citation_card.png', '來源引用卡', '來源與引用視覺草稿'],
-  ['07_task_status_flow.png', '任務狀態流程', '非即時狀態概念圖'],
-  ['08_research_workspace_panel.png', '研究工作區', '工作台配置草稿'],
-  ['09_knowledge_nodes.png', '知識節點', '研究關係概念圖'],
-  ['10_review_view.png', '證據審查', '核查視圖草稿'],
-  ['11_empty_state.png', '研究空狀態', '無任務時的視覺草稿'],
-  ['12_abstract_brand_background.png', '抽象背景', '深色玻璃品牌背景草稿']
+const visualAssets = [
+  ['01_reasona_hero.png', 'Reasona 主視覺'], ['02_planner_avatar.png', 'Planner 角色示意'], ['03_researcher_avatar.png', 'Researcher 角色示意'], ['04_reviewer_avatar.png', 'Reviewer 角色示意'],
+  ['05_agent_collaboration_ui.png', '代理協作概念'], ['06_source_citation_card.png', '來源引用卡概念'], ['07_task_status_flow.png', '任務狀態流程概念'], ['08_research_workspace_panel.png', '研究工作區概念'],
+  ['09_knowledge_nodes.png', '知識節點概念'], ['10_review_view.png', '證據核對概念'], ['11_empty_state.png', '研究空狀態概念'], ['12_abstract_brand_background.png', '抽象品牌背景']
 ] as const;
-
-async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (STATIC_PREVIEW) throw new Error('此網站是 GitHub Pages 靜態預覽，沒有已部署的 API、資料庫或登入服務。');
-  const response = await fetch(`/api${path}`, {
-    credentials: 'same-origin',
-    ...options,
-    headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers }
-  });
-  if (response.status === 204) return undefined as T;
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || data.error || `Request failed (${response.status})`);
-  return data as T;
-}
-const dateTime = (value?: string) => value ? new Intl.DateTimeFormat('zh-TW', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) : '—';
 const statusLabel: Record<TaskStatus, string> = { queued: '排隊中', running: '執行中', 'waiting for user': '等待使用者', completed: '已完成', failed: '失敗', cancelled: '已取消' };
 const statusClass: Record<TaskStatus, string> = { queued: 'queued', running: 'running', 'waiting for user': 'waiting', completed: 'completed', failed: 'failed', cancelled: 'cancelled' };
-const kindLabel = { source_fact: '來源直接支持', synthesis: '跨來源綜合', uncertainty: '不確定／證據缺口' };
+const claimLabel = { source_fact: '來源直接支持 · 候選', synthesis: '跨來源綜合 · 候選', uncertainty: '不確定性／證據缺口' } as const;
+const modelWeightMiB = Math.round(MODEL_WEIGHT_BYTES / (1024 * 1024));
+
+type DeleteTarget = { kind: 'conversation'; id: string; label: string } | { kind: 'agent'; id: string; label: string } | { kind: 'all'; id: 'all'; label: string } | null;
+type StreamingView = { taskId: string; role: 'Planner' | 'Researcher' | 'Reviewer'; body: string };
+
+function audit(action: string, entityType: string, entityId: string): AuditEvent {
+  return { id: newId(), action, entityType, entityId, at: isoNow() };
+}
+function displayDate(value: string) {
+  return new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+}
+function validWebUrl(value: string): boolean {
+  return safeHttpUrl(value) !== null;
+}
 
 export function App() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const [data, setData] = useState<LocalAppState>(() => createInitialState());
+  const [hydrated, setHydrated] = useState(false);
+  const [storageError, setStorageError] = useState('');
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<TaskDetail | null>(null);
-  const [readiness, setReadiness] = useState<Readiness | null>(() => STATIC_PREVIEW ? {
-    provider: { ready: false, provider: 'none', model: null, reason: 'GitHub Pages 僅提供靜態前端，API 尚未部署。' },
-    researchExecution: { ready: false, reason: '後端、模型、來源檢索與 runner 均未部署。' },
-    oauth: { configured: false, mode: 'static-preview' }
-  } : null);
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [composer, setComposer] = useState('');
-  const [chatDraft, setChatDraft] = useState('');
-  const [selectedAgent, setSelectedAgent] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
-  const [agentEditor, setAgentEditor] = useState<Agent | 'new' | null>(null);
-  const [sourceEditor, setSourceEditor] = useState(false);
-  const [claimEditor, setClaimEditor] = useState(false);
-  const [sourceDraft, setSourceDraft] = useState({ url: '', title: '' });
-  const [claimDraft, setClaimDraft] = useState({ kind: 'source_fact' as Claim['kind'], text: '', evidenceIds: [] as string[] });
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileNav, setMobileNav] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState('builtin-research-lead');
+  const [prompt, setPrompt] = useState('');
+  const [sourceDraft, setSourceDraft] = useState({ title: '', url: '', excerpt: '', locator: '' });
+  const [showSourceForm, setShowSourceForm] = useState(false);
+  const [agentDraft, setAgentDraft] = useState<AgentProfile | null>(null);
+  const [showAgentForm, setShowAgentForm] = useState(false);
+  const [modelState, setModelState] = useState<'not-loaded' | 'loading' | 'ready' | 'error'>('not-loaded');
+  const [modelProgress, setModelProgress] = useState({ text: '', progress: 0 });
+  const [modelError, setModelError] = useState('');
+  const [operationError, setOperationError] = useState('');
+  const [streaming, setStreaming] = useState<StreamingView | null>(null);
+  const [runBusy, setRunBusy] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
+  const engineRef = useRef<MLCEngine | null>(null);
+  const cancelRequested = useRef(false);
+  const persistQueue = useRef<Promise<void>>(Promise.resolve());
 
-  const activeConversation = conversations.find(item => item.id === activeConversationId) || null;
-  const refreshSidebar = useCallback(async () => {
-    const [nextConversations, nextAgents, nextReadiness, nextSchedules] = await Promise.all([
-      api<Conversation[]>('/conversations'), api<Agent[]>('/agents'), api<Readiness>('/readiness'), api<Schedule[]>('/schedules')
-    ]);
-    setConversations(nextConversations); setAgents(nextAgents); setReadiness(nextReadiness); setSchedules(nextSchedules);
-    if (!activeConversationId && nextConversations[0]) setActiveConversationId(nextConversations[0].id);
-  }, [activeConversationId]);
-
-  const loadConversation = useCallback(async (id: string) => {
-    const data = await api<{ conversation: Conversation; tasks: Task[]; messages: Message[] }>(`/conversations/${id}`);
-    setTasks(data.tasks);
-    setActiveTaskId(current => current && data.tasks.some(t => t.id === current) ? current : data.tasks[0]?.id || null);
-  }, []);
-  const loadTask = useCallback(async (id: string) => {
-    const data = await api<TaskDetail>(`/tasks/${id}`);
-    setDetail(data);
+  useEffect(() => {
+    let live = true;
+    loadState().then(saved => {
+      if (!live) return;
+      if (saved) {
+        const normalized = { ...createInitialState(), ...saved, auditEvents: saved.auditEvents || [] };
+        setData(normalized);
+        if (normalized.agents[0]) setSelectedAgentId(normalized.agents[0].id);
+        const mostRecentConversation = [...normalized.conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+        setActiveConversationId(mostRecentConversation?.id || null);
+      }
+      setHydrated(true);
+    }).catch(error => {
+      if (live) { setStorageError(error instanceof Error ? error.message : '本機資料儲存不可用。'); setHydrated(true); }
+    });
+    return () => { live = false; };
   }, []);
 
   useEffect(() => {
-    if (STATIC_PREVIEW) return;
-    let active = true;
-    void fetch('/api/auth/status', { credentials: 'same-origin' }).then(response => response.json()).then(async auth => {
-      if (!active || auth.mode !== 'google' || !auth.googleConfigured) return;
-      const session = await fetch('/api/me', { credentials: 'same-origin' });
-      if (active && session.status === 401) window.location.assign('/api/auth/google');
-    }).catch(() => undefined);
-    return () => { active = false; };
+    if (!hydrated || storageError) return;
+    persistQueue.current = persistQueue.current.then(() => saveState(data)).catch(error => {
+      setStorageError(error instanceof Error ? error.message : '保存本機資料失敗。');
+    });
+  }, [data, hydrated, storageError]);
+
+  const mutate = useCallback((transform: (previous: LocalAppState) => LocalAppState) => {
+    setData(previous => transform(previous));
   }, []);
-  useEffect(() => { if (STATIC_PREVIEW) return; refreshSidebar().catch(e => setError(e.message)); }, [refreshSidebar]);
-  useEffect(() => { if (activeConversationId) loadConversation(activeConversationId).catch(e => setError(e.message)); else { setTasks([]); setActiveTaskId(null); setDetail(null); } }, [activeConversationId, loadConversation]);
-  useEffect(() => { if (activeTaskId) loadTask(activeTaskId).catch(e => setError(e.message)); else setDetail(null); }, [activeTaskId, loadTask]);
+
+  const conversations = useMemo(() => [...data.conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [data.conversations]);
+  const activeConversation = data.conversations.find(item => item.id === activeConversationId) || null;
+  const activeAgent = data.agents.find(item => item.id === selectedAgentId) || data.agents[0] || null;
+  const conversationTasks = useMemo(() => data.tasks.filter(item => item.conversationId === activeConversationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [data.tasks, activeConversationId]);
+  const activeTask = data.tasks.find(item => item.id === activeTaskId && item.conversationId === activeConversationId) || conversationTasks[0] || null;
+  const conversationSources = useMemo(() => data.sources.filter(item => item.conversationId === activeConversationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [data.sources, activeConversationId]);
+  const taskMessages = useMemo(() => activeTask ? data.messages.filter(item => item.taskId === activeTask.id) : [], [data.messages, activeTask]);
+  const taskClaims = useMemo(() => activeTask ? data.claims.filter(item => item.taskId === activeTask.id) : [], [data.claims, activeTask]);
+  const taskSources = useMemo(() => activeTask ? data.sources.filter(item => activeTask.sourceIds.includes(item.id)) : [], [data.sources, activeTask]);
+
   useEffect(() => {
-    if (!activeTaskId || !detail) return;
-    const last = detail.events.at(-1)?.id || 0;
-    const stream = new EventSource(`/api/tasks/${activeTaskId}/stream?after=${last}`);
-    stream.onmessage = () => { loadTask(activeTaskId).catch(() => undefined); };
-    stream.addEventListener('status_changed', () => { loadTask(activeTaskId).catch(() => undefined); refreshSidebar().catch(() => undefined); });
-    stream.addEventListener('approval_required', () => loadTask(activeTaskId).catch(() => undefined));
-    stream.addEventListener('retry_blocked', () => loadTask(activeTaskId).catch(() => undefined));
-    stream.addEventListener('message_added', () => loadTask(activeTaskId).catch(() => undefined));
-    return () => stream.close();
-  }, [activeTaskId, detail?.events.length, loadTask, refreshSidebar]);
+    if (activeTask && !data.tasks.some(item => item.id === activeTaskId && item.conversationId === activeConversationId)) setActiveTaskId(activeTask.id);
+  }, [activeTask, activeTaskId, activeConversationId, data.tasks]);
 
-  const signOut = async () => {
-    try { await api<void>('/auth/logout', { method: 'POST' }); window.location.assign('/'); }
-    catch (e) { setError(e instanceof Error ? e.message : '登出失敗'); }
+  const createConversation = () => {
+    const at = isoNow(); const id = newId();
+    const item: Conversation = { id, title: '新研究對話', createdAt: at, updatedAt: at, titleEdited: false };
+    mutate(previous => ({ ...previous, conversations: [item, ...previous.conversations], auditEvents: [...previous.auditEvents, audit('conversation.created', 'conversation', id)] }));
+    setActiveConversationId(id); setActiveTaskId(null); setMobileNavOpen(false);
   };
 
-  const runAction = async (action: () => Promise<void>) => {
-    if (STATIC_PREVIEW) { setError('此 GitHub Pages 頁面沒有後端；寫入、登入、核准與任務執行目前停用。'); return; }
-    setError(''); setBusy(true);
-    try { await action(); } catch (e) { setError(e instanceof Error ? e.message : '操作失敗'); }
-    finally { setBusy(false); }
+  const setTaskPhase = (taskId: string, phase: string) => mutate(previous => ({
+    ...previous,
+    tasks: previous.tasks.map(item => item.id === taskId ? { ...item, phase, updatedAt: isoNow(), events: [...item.events, { id: newId(), status: item.status, phase, detail: `階段：${phase}`, createdAt: isoNow() }] } : item)
+  }));
+
+  const setTaskStatus = (taskId: string, next: TaskStatus, phase: string, blockedReason: string | null = null) => {
+    mutate(previous => ({
+      ...previous,
+      tasks: previous.tasks.map(item => {
+        if (item.id !== taskId) return item;
+        const status = transitionStatus(item.status, next);
+        const at = isoNow();
+        return { ...item, status, phase, blockedReason, updatedAt: at, events: [...item.events, { id: newId(), status, phase, detail: blockedReason || `狀態：${statusLabel[status]}`, createdAt: at }] };
+      }),
+      auditEvents: [...previous.auditEvents, audit(`task.status.${next.replaceAll(' ', '_')}`, 'task', taskId)]
+    }));
   };
-  const createConversation = () => runAction(async () => {
-    const row = await api<Conversation>('/conversations', { method: 'POST', body: JSON.stringify({}) });
-    await refreshSidebar(); setActiveConversationId(row.id); setMobileNav(false);
-  });
-  const submitResearch = (event: FormEvent) => {
-    event.preventDefault(); if (composer.trim().length < 8) return;
-    runAction(async () => {
-      const result = await api<{ task: Task; conversationId: string }>('/tasks', { method: 'POST', body: JSON.stringify({ prompt: composer.trim(), conversationId: activeConversationId || undefined, personalAgentId: selectedAgent || null }) });
-      setComposer(''); setActiveConversationId(result.conversationId); setActiveTaskId(result.task.id);
-      await refreshSidebar(); await loadConversation(result.conversationId); await loadTask(result.task.id);
-    });
+
+  const addMessage = (message: Omit<ChatMessage, 'id' | 'createdAt'>) => mutate(previous => ({
+    ...previous,
+    messages: [...previous.messages, { ...message, id: newId(), createdAt: isoNow() }]
+  }));
+
+  const generateRole = async (taskId: string, role: StreamingView['role'], system: string, user: string, jsonMode = false, maxTokens = 420) => {
+    if (!engineRef.current) throw new Error('本機模型尚未載入。');
+    setStreaming({ taskId, role, body: '' });
+    const output = await streamLocalCompletion(engineRef.current, [
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ], delta => setStreaming(current => current?.taskId === taskId && current.role === role ? { ...current, body: current.body + delta } : current), jsonMode, maxTokens);
+    setStreaming(null);
+    return output;
   };
-  const sendGroupMessage = (event: FormEvent) => {
-    event.preventDefault(); if (!activeTaskId || !chatDraft.trim()) return;
-    runAction(async () => { await api(`/tasks/${activeTaskId}/messages`, { method: 'POST', body: JSON.stringify({ body: chatDraft.trim() }) }); setChatDraft(''); await loadTask(activeTaskId); });
+
+  const runPipeline = async (task: Task, sourceSnapshot: SourceRecord[]) => {
+    if (!engineRef.current) { setOperationError('本機模型尚未就緒；沒有送出任何 AI 請求。'); return; }
+    cancelRequested.current = false; setRunBusy(true); setOperationError('');
+    try {
+      setTaskStatus(task.id, 'running', 'Planner · 任務拆解');
+      const evidenceText = sourceSnapshot.length ? sourceSnapshot.map(source => `[evidenceId=${source.evidenceId}]\n標題（使用者提供）：${source.title}\nURL（使用者提供）：${source.url}\n定位（使用者提供）：${source.locator || '未提供'}\n原文片段（使用者提供）：\n${source.excerpt}`).join('\n\n---\n\n') : '目前沒有使用者提供的來源片段。不得提出來源事實或編造引用。';
+      const planner = await generateRole(task.id, 'Planner', `${task.agentSnapshot.instructions}\n你是 Planner，只拆解研究問題，不做網路搜尋、不引用外部事實、不宣稱已查證。`, `研究問題：\n${task.prompt}\n\n請以繁體中文列出不超過 4 個研究子問題和可能的證據需求。這只是規劃建議，不是研究事實。`, false, 260);
+      if (cancelRequested.current) return;
+      addMessage({ conversationId: task.conversationId, taskId: task.id, speaker: 'agent', role: 'Planner', body: planner || 'Planner 沒有回傳文字。' });
+
+      setTaskPhase(task.id, 'Researcher · 檢視使用者貼上的來源片段');
+      const researcher = await generateRole(task.id, 'Researcher', `${task.agentSnapshot.instructions}\n你是 Researcher。你不能瀏覽網頁、搜尋網路或呼叫工具。只可閱讀下列使用者提供的原文片段；將觀察標為候選，不要補造來源、作者或日期。`, `研究問題：\n${task.prompt}\n\nPlanner 的子問題（未驗證）：\n${planner}\n\n可用來源片段：\n${evidenceText}\n\n請簡潔說明可用證據與缺口；每個觀察只提及給定的 evidenceId。若沒有來源，直接說明無法提出事實主張。`, false, 360);
+      if (cancelRequested.current) return;
+      addMessage({ conversationId: task.conversationId, taskId: task.id, speaker: 'agent', role: 'Researcher', body: researcher || 'Researcher 沒有回傳文字。' });
+
+      setTaskPhase(task.id, 'Reviewer · 驗證 evidence ID 並整理候選主張');
+      const allowed = sourceSnapshot.map(source => source.evidenceId);
+      const reviewer = await generateRole(task.id, 'Reviewer', `你是 Reviewer。不得搜尋網路。你只能根據輸入中的使用者原文片段提出「候選」主張。絕不可創造作者、日期、引文、URL 或 evidence ID。若證據不足，把資訊放入 gaps；若來源互相矛盾，把差異放入 conflicts。source_fact 和 synthesis 每項都必須引用至少一個原文提供的 evidenceId。沒有證據時只可回傳 uncertainty 類別或空 claims。所有內容尚未經人工語義核對。`, `只能輸出一個符合下列 JSON schema 的 JSON object，不要使用 markdown fence：{"claims":[{"kind":"source_fact|synthesis|uncertainty","text":"候選主張","evidenceIds":["只可使用已列出的 evidenceId"],"note":"限制或核對事項"}],"gaps":["待補證據／問題"],"conflicts":["可能衝突；需人工核對"]}\n\n研究問題：\n${task.prompt}\n\n已允許的 evidenceId：${JSON.stringify(allowed)}\n\n來源片段：\n${evidenceText}\n\nResearcher 的候選觀察（未驗證）：\n${researcher}\n\n注意：可用 ID 為空時，claims 不可含 source_fact 或 synthesis。`, true, 560);
+      if (cancelRequested.current) return;
+      addMessage({ conversationId: task.conversationId, taskId: task.id, speaker: 'agent', role: 'Reviewer', body: reviewer || 'Reviewer 沒有回傳文字。' });
+
+      let review;
+      try { review = parseReviewOutput(reviewer, new Set(allowed)); }
+      catch (error) {
+        const reason = error instanceof Error ? error.message : '輸出需要人工檢查。';
+        setTaskStatus(task.id, 'waiting for user', 'Reviewer 輸出待人工處理', reason);
+        return;
+      }
+      const records: ClaimRecord[] = review.claims.map(item => ({ id: newId(), taskId: task.id, kind: item.kind, text: item.text, evidenceIds: item.evidenceIds, note: item.note, reviewedAt: null }));
+      mutate(previous => ({ ...previous, claims: [...previous.claims, ...records], tasks: previous.tasks.map(item => item.id === task.id ? { ...item, gaps: review.gaps, conflicts: review.conflicts } : item) }));
+      setTaskStatus(task.id, 'waiting for user', '候選短報告待人工核對', '模型草稿尚未經語義核查；請逐項開啟來源原文並核對。若沒有主張，請先補上來源片段或調整問題。');
+    } catch (error) {
+      setStreaming(null);
+      if (!cancelRequested.current) {
+        const reason = error instanceof Error ? error.message : '本機推理失敗。';
+        setOperationError(reason);
+        try { setTaskStatus(task.id, 'failed', '本機推理失敗', reason); } catch { /* task may already be cancelled */ }
+      }
+    } finally {
+      setStreaming(null); setRunBusy(false);
+    }
   };
-  const deleteConversation = () => {
-    if (!deleteTarget) return;
-    runAction(async () => {
-      await api(`/conversations/${deleteTarget.id}`, { method: 'DELETE', body: JSON.stringify({ confirm: true, acknowledgedScope: 'conversation-tasks-messages-sources-evidence-claims-approvals' }) });
-      if (activeConversationId === deleteTarget.id) { setActiveConversationId(null); setDetail(null); setActiveTaskId(null); }
-      setDeleteTarget(null); await refreshSidebar();
-    });
+
+  const loadModel = async () => {
+    if (!hasWebGPU()) { setModelState('error'); setModelError('此瀏覽器無 WebGPU。Reasona 不會改用付費 API 或遠端模型。'); return; }
+    setModelState('loading'); setModelError(''); setModelProgress({ text: '等待 WebGPU 模型載入回報…', progress: 0 });
+    try {
+      engineRef.current = await loadLocalModel((text, progress) => setModelProgress({ text, progress }));
+      setModelState('ready'); setModelProgress({ text: '模型載入完成，推理在此瀏覽器本機執行。', progress: 1 });
+    } catch (error) {
+      engineRef.current = null; setModelState('error'); setModelError(error instanceof Error ? error.message : '載入本機模型失敗。');
+    }
   };
-  const renameConversation = () => {
-    if (!activeConversation) return;
-    const title = window.prompt('編輯對話名稱', activeConversation.title);
-    if (!title?.trim()) return;
-    runAction(async () => { await api(`/conversations/${activeConversation.id}`, { method: 'PATCH', body: JSON.stringify({ title: title.trim() }) }); await refreshSidebar(); });
+
+  const submitTask = async (event: FormEvent) => {
+    event.preventDefault();
+    const question = prompt.trim();
+    if (question.length < 8 || !activeAgent || modelState !== 'ready' || storageError) return;
+    if (!engineRef.current) { setOperationError('本機模型 engine 尚未就緒；任務未建立。請重新載入模型。'); return; }
+    let conversation = activeConversation;
+    if (!conversation) {
+      const at = isoNow();
+      conversation = { id: newId(), title: autoTitle(question), createdAt: at, updatedAt: at, titleEdited: false };
+      mutate(previous => ({ ...previous, conversations: [conversation!, ...previous.conversations], auditEvents: [...previous.auditEvents, audit('conversation.created', 'conversation', conversation!.id)] }));
+      setActiveConversationId(conversation.id);
+    } else if (!conversation.titleEdited && conversation.title === '新研究對話') {
+      conversation = { ...conversation, title: autoTitle(question), updatedAt: isoNow() };
+      mutate(previous => ({ ...previous, conversations: previous.conversations.map(item => item.id === conversation!.id ? conversation! : item) }));
+    }
+    const at = isoNow(); const id = newId();
+    const sourceSnapshot = data.sources.filter(item => item.conversationId === conversation!.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 5);
+    const task: Task = {
+      id, conversationId: conversation.id, title: autoTitle(question), prompt: question, status: 'queued', phase: 'queued', blockedReason: null,
+      agentSnapshot: { id: activeAgent.id, name: activeAgent.name, role: activeAgent.role, instructions: activeAgent.instructions },
+      sourceIds: sourceSnapshot.map(item => item.id), events: [{ id: newId(), status: 'queued', phase: 'queued', detail: '任務已建立，尚未執行。', createdAt: at }],
+      gaps: [], conflicts: [], createdAt: at, updatedAt: at
+    };
+    mutate(previous => ({
+      ...previous,
+      tasks: [task, ...previous.tasks],
+      messages: [...previous.messages, { id: newId(), conversationId: conversation!.id, taskId: id, speaker: 'user', role: '使用者', body: question, createdAt: at }],
+      auditEvents: [...previous.auditEvents, audit('task.created', 'task', id)]
+    }));
+    setActiveTaskId(id); setPrompt('');
+    await runPipeline(task, sourceSnapshot);
   };
-  const saveAgent = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); const form = new FormData(event.currentTarget);
-    const values = { name: String(form.get('name') || '').trim(), role: String(form.get('role') || '').trim(), description: String(form.get('description') || '').trim(), instructions: String(form.get('instructions') || '').trim(), allowedSources: [] as string[] };
-    if (values.instructions.length === 0) return;
-    runAction(async () => {
-      const editing = typeof agentEditor === 'object' && agentEditor !== null;
-      await api(editing ? `/agents/${agentEditor.id}` : '/agents', { method: editing ? 'PATCH' : 'POST', body: JSON.stringify(values) });
-      setAgentEditor(null); await refreshSidebar();
-    });
-  };
+
   const addSource = (event: FormEvent) => {
-    event.preventDefault(); if (!activeTaskId) return;
-    runAction(async () => { await api(`/tasks/${activeTaskId}/sources`, { method: 'POST', body: JSON.stringify(sourceDraft) }); setSourceDraft({ url: '', title: '' }); setSourceEditor(false); await loadTask(activeTaskId); });
-  };
-  const addEvidence = (source: Source) => {
-    const excerpt = window.prompt('貼上來源中的原文段落（目前只記錄你提供的片段，不會自動擷取或驗證網頁）');
-    if (!excerpt?.trim() || !activeTaskId) return;
-    const locator = window.prompt('段落位置（可留空，例如標題或頁碼）') || undefined;
-    runAction(async () => { await api(`/tasks/${activeTaskId}/sources/${source.id}/evidence`, { method: 'POST', body: JSON.stringify({ excerpt: excerpt.trim(), locator }) }); await loadTask(activeTaskId); });
-  };
-  const addClaim = (event: FormEvent) => {
-    event.preventDefault(); if (!activeTaskId) return;
-    runAction(async () => { await api(`/tasks/${activeTaskId}/claims`, { method: 'POST', body: JSON.stringify(claimDraft) }); setClaimDraft({ kind: 'source_fact', text: '', evidenceIds: [] }); setClaimEditor(false); await loadTask(activeTaskId); });
-  };
-  const retryTask = () => activeTaskId && runAction(async () => { try { await api(`/tasks/${activeTaskId}/retry`, { method: 'POST', body: '{}' }); } catch (e) { if (e instanceof Error) setError(e.message); } await loadTask(activeTaskId); });
-  const cancelTask = () => activeTaskId && runAction(async () => { await api(`/tasks/${activeTaskId}/cancel`, { method: 'POST', body: '{}' }); await loadTask(activeTaskId); await refreshSidebar(); });
-  const decideApproval = (approval: Approval, decision: 'approve' | 'reject') => {
-    const payloadText = JSON.stringify(approval.payload, null, 2);
-    const verb = decision === 'approve' ? '核准' : '拒絕';
-    const warning = decision === 'approve' ? '\n\n目前沒有外部執行器；核准只會留下紀錄，不會寄送、發布或改變外部狀態。' : '\n\n拒絕只會留下紀錄，不會執行外部操作。';
-    if (!window.confirm(`請確認你要${verb}以下精確動作：\n\n${approval.action}\n\n參數：\n${payloadText}\n\nSHA-256：${approval.payload_hash}${warning}`)) return;
-    runAction(async () => {
-      const body = decision === 'approve' ? { confirm: true, payload: approval.payload } : { confirm: true, payloadHash: approval.payload_hash };
-      await api(`/approvals/${approval.id}/${decision}`, { method: 'POST', body: JSON.stringify(body) });
-      if (activeTaskId) await loadTask(activeTaskId);
-    });
+    event.preventDefault();
+    if (!activeConversation || !sourceDraft.title.trim() || !validWebUrl(sourceDraft.url.trim()) || !sourceDraft.excerpt.trim()) {
+      setOperationError('請提供標題、有效的 HTTP(S) URL 與你已閱讀的原文片段。'); return;
+    }
+    const source: SourceRecord = { id: newId(), evidenceId: `ev-${newId()}`, conversationId: activeConversation.id, title: sourceDraft.title.trim(), url: sourceDraft.url.trim(), excerpt: sourceDraft.excerpt.trim(), locator: sourceDraft.locator.trim(), createdAt: isoNow() };
+    mutate(previous => ({ ...previous, sources: [...previous.sources, source], auditEvents: [...previous.auditEvents, audit('source.added', 'source', source.id)] }));
+    setSourceDraft({ title: '', url: '', excerpt: '', locator: '' }); setShowSourceForm(false); setOperationError('');
   };
 
-  const currentEvents = detail?.events || [];
-  const factCount = detail?.claims.filter(c => c.kind === 'source_fact').length || 0;
-  const claimCount = detail?.claims.length || 0;
-  const groupMessages = detail?.messages || [];
-  const eventTitle = useMemo(() => detail?.task.title || activeConversation?.title || '新的研究任務', [detail?.task.title, activeConversation?.title]);
+  const saveAgent = (event: FormEvent) => {
+    event.preventDefault();
+    if (!agentDraft?.name.trim() || !agentDraft.role.trim() || !agentDraft.instructions.trim()) return;
+    const at = isoNow(); const editing = data.agents.some(item => item.id === agentDraft.id);
+    const next = { ...agentDraft, name: agentDraft.name.trim(), role: agentDraft.role.trim(), instructions: agentDraft.instructions.trim(), updatedAt: at };
+    mutate(previous => ({
+      ...previous,
+      agents: editing ? previous.agents.map(item => item.id === next.id ? next : item) : [...previous.agents, { ...next, createdAt: at }],
+      auditEvents: [...previous.auditEvents, audit(editing ? 'agent.updated' : 'agent.created', 'agent', next.id)]
+    }));
+    setSelectedAgentId(next.id); setAgentDraft(null); setShowAgentForm(false);
+  };
 
-  return <div className={`app-shell ${collapsed ? 'sidebar-collapsed' : ''} ${mobileNav ? 'mobile-nav-open' : ''}`}>
-    <aside className="sidebar" aria-label="工作區側欄">
-      <div className="brand-row"><div className="brand-mark" aria-hidden="true"><span>R</span></div><div className="brand-copy"><strong>Reasona</strong><small>RESEARCH WORKSPACE</small></div><button className="icon-button sidebar-collapse" aria-label="收合側欄" onClick={() => setCollapsed(v => !v)}><PanelLeftClose size={16}/></button></div>
-      <button className="new-conversation" onClick={createConversation} disabled={STATIC_PREVIEW} title={STATIC_PREVIEW ? '靜態預覽沒有 API 或資料庫' : undefined}><Plus size={16}/><span>新增研究對話</span><kbd>⌘ K</kbd></button>
-      <div className="side-section"><div className="side-heading"><span>工作區</span><button className="icon-button small" aria-label="搜尋對話" onClick={() => document.getElementById('research-input')?.focus()}><Search size={14}/></button></div>
-        <nav className="conversation-list" aria-label="對話列表">
-          {conversations.map(conv => <div key={conv.id} className={`conversation-item ${conv.id === activeConversationId ? 'active' : ''}`}>
-            <button className="conversation-select" onClick={() => { setActiveConversationId(conv.id); setMobileNav(false); }}><MessageSquareText size={15}/><span>{conv.title}</span></button>
-            <button className="row-delete icon-button small" aria-label={`刪除對話 ${conv.title}`} onClick={() => setDeleteTarget(conv)} disabled={STATIC_PREVIEW}><Trash2 size={13}/></button>
-          </div>)}
-          {!conversations.length && <p className="sidebar-empty">建立第一個研究對話，所有資料會分開保存。</p>}
-        </nav>
-      </div>
-      <div className="side-section agent-list-section"><div className="side-heading"><span>個人 Agent</span><button className="icon-button small" aria-label="新增個人 Agent" onClick={() => setAgentEditor('new')} disabled={STATIC_PREVIEW}><Plus size={14}/></button></div>
-        <div className="agent-list">{agents.map(agent => <button className={`agent-row ${agent.id === selectedAgent ? 'chosen' : ''}`} key={agent.id} onClick={() => { setSelectedAgent(agent.id); setAgentEditor(agent); }}><span className="agent-avatar"><Bot size={15}/></span><span><b>{agent.name}</b><small>{agent.role} · v{agent.version}</small></span><Settings2 size={13} className="agent-settings"/></button>)}
-          {!agents.length && <p className="sidebar-empty">尚無個人 Agent。建立設定後可用於新任務；設定本身不代表代理已執行。</p>}</div>
-      </div>
-      <div className="sidebar-bottom"><div className="local-user"><span className="user-avatar"><UserRound size={16}/></span><span><b>{STATIC_PREVIEW ? '公開靜態預覽' : readiness?.oauth.mode === 'google' ? 'Google 工作區' : '本機工作區'}</b><small>{STATIC_PREVIEW ? '無登入、API 或資料儲存' : readiness?.oauth.mode === 'local' ? 'Local development · 非 Google 登入' : '登入與權限依 owner 隔離'}</small></span>{!STATIC_PREVIEW && readiness?.oauth.mode === 'google' ? <button className="icon-button small" onClick={signOut} aria-label="登出 Google 工作區" title="登出"><LogOut size={14}/></button> : !STATIC_PREVIEW && <ChevronDown size={14}/>}</div><div className="privacy-note"><ShieldCheck size={13}/><span>{STATIC_PREVIEW ? '此靜態頁不儲存或讀取你的研究資料' : readiness?.oauth.mode === 'local' ? '本機單一使用者 · 僅開發環境' : '使用者資料依 owner 隔離'}</span></div></div>
-    </aside>
-    <button className="mobile-scrim" aria-label="關閉選單" onClick={() => setMobileNav(false)} />
+  const newAgent = () => {
+    const at = isoNow();
+    setAgentDraft({ id: newId(), name: '', role: '', instructions: '', createdAt: at, updatedAt: at }); setShowAgentForm(true);
+  };
 
-    <main className="workspace">
-      <header className="topbar"><div className="topbar-left"><button className="icon-button mobile-menu" aria-label="開啟導覽" onClick={() => setMobileNav(true)}><Menu size={18}/></button><span className="breadcrumb">研究工作區</span><span className="breadcrumb-divider">/</span><span className="breadcrumb-current">{activeConversation?.title || '尚未選擇對話'}</span><button className="icon-button small rename-button" aria-label="編輯對話名稱" disabled={!activeConversation || STATIC_PREVIEW} onClick={renameConversation}><Settings2 size={14}/></button></div><div className="topbar-right"><span className="environment-pill"><span className="status-dot muted"/>{STATIC_PREVIEW ? 'GitHub Pages · 靜態預覽' : '開發環境'}</span><button className="icon-button" aria-label="說明" title="所有研究執行在 provider 與來源工具明確設定前保持停用"><CircleHelp size={17}/></button></div></header>
-      <div className="content-scroll">
-        <div className="content-wrap">
-          {STATIC_PREVIEW && <div className="preview-banner" role="status"><ShieldCheck size={16}/><span><b>靜態網站預覽</b> · 此 GitHub Pages 網站沒有 SQLite、API、Google 登入或 AI runner。研究操作已停用；不會儲存你的輸入，也不會產生模擬答案。</span><a href="https://github.com/xiaoyu0712-beep/Reasona-AI-Agent/blob/main/README.md" target="_blank" rel="noreferrer">設定與限制 <ArrowUpRight size={12}/></a></div>}
-          {error && <div className="alert error-alert" role="alert"><CircleHelp size={16}/><span>{error}</span><button className="icon-button small" onClick={() => setError('')} aria-label="關閉錯誤"><X size={14}/></button></div>}
-          <section className="task-heading">
-            <div className="heading-copy"><div className="eyebrow"><span>研究任務</span><span className="eyebrow-dot">·</span><span>{detail ? dateTime(detail.task.created_at) : '新工作階段'}</span></div><h1>{eventTitle}</h1><p>{detail?.task.prompt || '以可追溯來源建立研究短報告。輸入研究問題後，系統會記錄任務；未設定 AI 與來源工具時不會假裝執行。'}</p></div>
-            <div className="heading-actions">{detail && <><button className="button secondary" onClick={retryTask} disabled={busy || detail.task.status === 'cancelled' || detail.task.status === 'completed'}><RefreshCw size={14}/>檢查重試條件</button>{['queued','running','waiting for user'].includes(detail.task.status) && <button className="button ghost" onClick={cancelTask} disabled={busy}><X size={14}/>取消</button>}</>}</div>
+  const deleteConfirmed = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    if ((target.kind === 'all' || (target.kind === 'conversation' && activeConversationId === target.id && activeTask?.status === 'running')) && runBusy) {
+      cancelRequested.current = true;
+      try { await interruptLocalGeneration(); } catch { /* stop the active local generation before deleting its data */ }
+      setStreaming(null);
+    }
+    if (target.kind === 'all') {
+      try { await persistQueue.current; await clearLocalDatabase(); } catch (error) { setOperationError(error instanceof Error ? error.message : '刪除失敗。'); return; }
+      setData(createInitialState()); setActiveConversationId(null); setActiveTaskId(null); setSelectedAgentId('builtin-research-lead');
+    } else if (target.kind === 'conversation') {
+      mutate(previous => ({
+        ...previous,
+        conversations: previous.conversations.filter(item => item.id !== target.id),
+        tasks: previous.tasks.filter(item => item.conversationId !== target.id),
+        sources: previous.sources.filter(item => item.conversationId !== target.id),
+        messages: previous.messages.filter(item => item.conversationId !== target.id),
+        claims: previous.claims.filter(claim => !previous.tasks.some(task => task.id === claim.taskId && task.conversationId === target.id)),
+        auditEvents: [...previous.auditEvents, audit('conversation.deleted', 'conversation', target.id)]
+      }));
+      if (activeConversationId === target.id) { setActiveConversationId(null); setActiveTaskId(null); }
+    } else {
+      if (target.id === 'builtin-research-lead') { setOperationError('內建範本不能刪除；可編輯或新增個人 Agent。'); setDeleteTarget(null); return; }
+      mutate(previous => ({ ...previous, agents: previous.agents.filter(item => item.id !== target.id), auditEvents: [...previous.auditEvents, audit('agent.deleted', 'agent', target.id)] }));
+      if (selectedAgentId === target.id) setSelectedAgentId('builtin-research-lead');
+    }
+    setDeleteTarget(null);
+  };
+
+  const cancelRun = async () => {
+    if (!activeTask || activeTask.status !== 'running') return;
+    cancelRequested.current = true;
+    try { await interruptLocalGeneration(); } catch { /* stop is best-effort; no new role will be started */ }
+    try { setTaskStatus(activeTask.id, 'cancelled', '已取消', '使用者取消本機生成；已停止後續代理步驟。'); } catch { /* state may already be terminal */ }
+    setStreaming(null);
+  };
+
+  const reviewClaim = (claim: ClaimRecord) => {
+    if (!activeTask || activeTask.status !== 'waiting for user') return;
+    const reviewedAt = isoNow();
+    mutate(previous => ({ ...previous, claims: previous.claims.map(item => item.id === claim.id ? { ...item, reviewedAt } : item), auditEvents: [...previous.auditEvents, audit('claim.reviewed', 'claim', claim.id)] }));
+    const outstanding = taskClaims.filter(item => item.id !== claim.id && !item.reviewedAt);
+    if (outstanding.length === 0) {
+      setTaskStatus(activeTask.id, 'completed', '人工核對完成', '所有候選主張均已由使用者標記核對；此標記不構成 Reasona 的自動驗證。');
+    }
+  };
+
+  const retryTask = (task: Task) => {
+    setPrompt(task.prompt);
+    document.getElementById('research-prompt')?.focus();
+  };
+
+  const currentStreaming = streaming?.taskId === activeTask?.id ? streaming : null;
+  const modelStatusText = modelState === 'ready' ? '本機模型已載入' : modelState === 'loading' ? '載入模型中' : modelState === 'error' ? '模型無法使用' : '尚未載入模型';
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <button className="icon-button mobile-menu" type="button" onClick={() => setMobileNavOpen(value => !value)} aria-label="切換側邊導覽"><Menu size={18} /></button>
+        <a className="wordmark" href="#workspace" aria-label="Reasona 研究工作台首頁"><span className="brand-mark">R</span><span>REASONA</span><small>LOCAL RESEARCH STUDIO</small></a>
+        <div className="topbar-center"><span className="mode-dot" /> 靜態網站 · 瀏覽器本機模式 <span className="topbar-divider" /> 無後端／無同步</div>
+        <button className="icon-button" type="button" title="資料與權限" onClick={() => document.getElementById('privacy-panel')?.scrollIntoView({ behavior: 'smooth' })}><ShieldCheck size={18} /></button>
+      </header>
+
+      <div className={`workspace-grid ${mobileNavOpen ? 'nav-open' : ''}`} id="workspace">
+        <aside className="sidebar" aria-label="對話與 Agent 導覽">
+          <div className="sidebar-heading"><span>工作區</span><span className="local-pill">只在本機</span></div>
+          <button className="new-conversation" type="button" onClick={createConversation}><Plus size={16} /> 新研究對話</button>
+          <div className="side-section-label"><span>對話</span><span>{conversations.length}</span></div>
+          <nav className="conversation-list" aria-label="對話清單">
+            {conversations.length === 0 ? <p className="sidebar-empty">尚無對話。提出第一個研究問題即可建立。</p> : conversations.map(item => (
+              <div key={item.id} className="conversation-row">
+                <button type="button" className={`conversation-item ${activeConversationId === item.id ? 'selected' : ''}`} onClick={() => { setActiveConversationId(item.id); setActiveTaskId(null); setMobileNavOpen(false); }}><MessageSquareText size={15} /><span>{item.title}</span></button>
+                <button className="row-delete" type="button" aria-label={`刪除 ${item.title}`} onClick={() => setDeleteTarget({ kind: 'conversation', id: item.id, label: item.title })}><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </nav>
+
+          <div className="side-section-label agent-heading"><span>個人 Agent</span><button type="button" className="tiny-icon" title="新增 Agent" onClick={newAgent}><Plus size={15} /></button></div>
+          <div className="agent-list">
+            {data.agents.map(agent => <div key={agent.id} className={`agent-row ${selectedAgentId === agent.id ? 'selected' : ''}`}>
+              <button type="button" className="agent-select" onClick={() => setSelectedAgentId(agent.id)}><span className="avatar-mini"><img src={`${ASSET_BASE}${agent.role.toLowerCase().includes('研究') ? '03_researcher_avatar.png' : '02_planner_avatar.png'}`} alt="" /></span><span><b>{agent.name}</b><small>{agent.role}</small></span></button>
+              <button type="button" className="tiny-icon" aria-label={`編輯 ${agent.name}`} onClick={() => { setAgentDraft(agent); setShowAgentForm(true); }}><Settings2 size={14} /></button>
+            </div>)}
+          </div>
+          <div className="sidebar-footer">
+            <div className="user-local"><span className="user-icon"><LockKeyhole size={15} /></span><span><b>本機使用者</b><small>無帳戶、無雲端同步</small></span></div>
+            <button className="text-button danger-text" type="button" onClick={() => setDeleteTarget({ kind: 'all', id: 'all', label: 'Reasona 工作區資料' })}><Trash2 size={14} /> 清除 Reasona 工作區資料</button>
+          </div>
+        </aside>
+
+        <main className="main-column">
+          <section className="main-heading">
+            <div className="eyebrow"><span className="eyebrow-line" /> 來源可追溯研究工作台</div>
+            <h1>{activeTask?.title || activeConversation?.title || '把問題拆清楚，再沿著證據前進。'}</h1>
+            <p>使用者提供來源片段 · 本機 Qwen 推理 · 每項候選主張連結回 evidence</p>
           </section>
 
-          <section className="status-panel glass-panel" aria-label="任務狀態與分工">
-            <div className="status-overview"><div className="status-main"><span className={`status-icon ${detail ? statusClass[detail.task.status] : 'idle'}`}>{detail?.task.status === 'running' ? <LoaderCircle size={17} className="actual-running"/> : <Activity size={16}/>}</span><div><small>真實任務狀態</small><strong>{detail ? statusLabel[detail.task.status] : '尚未建立任務'}</strong></div></div><div className="status-divider"/><div className="status-phase"><small>目前階段</small><strong>{detail?.task.phase || '等待研究問題'}</strong></div><div className="status-divider wide-only"/><div className="status-agent"><div className="stacked-avatars"><span><Sparkles size={13}/></span><span><Bot size={13}/></span></div><div><small>代理分工</small><strong>{detail ? (detail.task.personal_agent_snapshot ? `${detail.task.personal_agent_snapshot.name} · v${detail.task.personal_agent_snapshot.version}` : '主 Agent · 尚未啟動') : '尚未分派'}</strong></div></div></div>
-            {detail?.task.blocked_reason && <div className="blocked-callout"><div className="blocked-sign"><CircleHelp size={15}/></div><div><b>任務受阻，未執行模型或代理</b><p>{detail.task.blocked_reason}</p></div><button className="text-button" onClick={() => window.open('#setup', '_self')}>查看設定方式 <ArrowUpRight size={13}/></button></div>}
-            {!detail && <div className="status-footnote">狀態只由後端持久事件提供；不顯示虛構百分比。</div>}
+          <section className="readiness-strip" aria-label="模型與服務狀態">
+            <div className={`readiness-icon ${modelState}`}><Cpu size={17} /></div>
+            <div className="readiness-copy"><strong>{modelStatusText}</strong><span>{modelState === 'ready' ? `${MODEL_DISPLAY_NAME} · 輸入留在此瀏覽器` : `首次載入約 ${modelWeightMiB} MiB 模型權重，需 WebGPU；不會使用 API key 或付費服務。`}</span></div>
+            {modelState === 'ready' ? <span className="ready-chip"><Check size={13} /> 本機推理</span> : <button className="button button-light" type="button" disabled={modelState === 'loading'} onClick={() => void loadModel()}>{modelState === 'loading' ? <><LoaderCircle className="spin" size={15} /> 載入中</> : <><Cpu size={15} /> 載入本機模型</>}</button>}
+            {modelState === 'loading' && <div className="model-progress" aria-live="polite"><span>{modelProgress.text}</span><progress max={1} value={modelProgress.progress} aria-label="模型載入實際進度" /></div>}
+            {modelError && <div className="inline-error" role="alert">{modelError}</div>}
           </section>
 
-          <div className="research-layout">
-            <section className="research-main">
-              {!detail ? <div className="empty-research glass-panel"><img className="empty-research-art" src={assetUrl('11_empty_state.png')} alt="" aria-hidden="true"/><div className="empty-orbit"><Layers3 size={22}/></div><div className="eyebrow">SOURCE-GROUNDED RESEARCH</div><h2>把問題交給可核查的研究流程</h2><p>{STATIC_PREVIEW ? '此 GitHub Pages 預覽尚無後端、模型或來源工具。資料輸入與任務操作已停用，不會產生假研究內容。' : '任務會先記錄為待處理狀態。AI 尚未就緒時，不會產生模型回答、代理回報或假進度。'}</p><div className="empty-points"><span><Check size={13}/>對話彼此隔離</span><span><Check size={13}/>逐項來源關聯</span><span><Check size={13}/>失敗原因可見</span></div></div> : <>
-                <section className="report-card glass-panel"><div className="section-title-row"><div><div className="eyebrow">SHORT REPORT</div><h2>研究紀錄</h2></div><div className="report-meta"><span><FilePlus2 size={13}/>{claimCount} 條主張</span><span><Archive size={13}/>{detail.sources.length} 個來源</span></div></div>
-                  {detail.claims.length ? <div className="claim-list">{detail.claims.map(claim => <article className="claim-card" key={claim.id}><div className="claim-label-row"><span className={`claim-type ${claim.kind}`}>{kindLabel[claim.kind]}</span><span className="unreviewed-badge">未經核查</span></div><p>{claim.text}</p>{claim.evidence.filter(e => e.id).length > 0 && <div className="claim-evidence">{claim.evidence.filter(e => e.id).map(e => <a key={e.id} href={e.url} target="_blank" rel="noreferrer"><span className="evidence-marker">↳</span><span><b>{e.title}</b><small>{e.locator || '來源片段'}：{e.excerpt}</small></span><ArrowUpRight size={13}/></a>)}</div>}{claim.kind === 'uncertainty' && !claim.evidence.filter(e => e.id).length && <p className="uncertainty-note">目前沒有連結證據，保留為明確缺口。</p>}</article>)}</div> : <div className="report-empty"><div className="report-empty-icon"><FilePlus2 size={17}/></div><div><b>尚無研究主張</b><p>只有在你加入具體來源與 evidence span 後，才能記錄主張。系統不會自動生成報告。</p></div></div>}
-                  <div className="report-actions"><button className="button secondary" onClick={() => setSourceEditor(true)} disabled={STATIC_PREVIEW || !activeTaskId}><Plus size={14}/>加入來源</button><button className="button secondary" onClick={() => setClaimEditor(true)} disabled={STATIC_PREVIEW || !activeTaskId}><Plus size={14}/>記錄主張</button></div>
-                </section>
-                <section className="sources-card glass-panel"><div className="section-title-row compact"><div><div className="eyebrow">SOURCE LEDGER</div><h3>來源與證據</h3></div><span className="counter-pill">{detail.sources.length}</span></div>
-                  {!detail.sources.length ? <p className="small-muted">尚無來源。加入來源 URL 與人工提供的具體摘錄；此版本不會自動擷取網頁，也不會把連結視為已驗證。</p> : <div className="source-list">{detail.sources.map(source => <article className="source-row" key={source.id}><div className="source-icon"><Archive size={15}/></div><div className="source-info"><a href={source.url} target="_blank" rel="noreferrer">{source.title}<ArrowUpRight size={12}/></a><span>{source.publisher || new URL(source.url).hostname} · 未驗證 · {source.evidence?.length || 0} 段 evidence</span></div><button className="text-button" onClick={() => addEvidence(source)}>加入摘錄</button></article>)}</div>}
-                </section>
-                <section className="activity-card glass-panel"><div className="section-title-row compact"><div><div className="eyebrow">PERSISTED EVENTS</div><h3>任務事件</h3></div><Radio size={15}/></div>{currentEvents.length ? <ol className="event-list">{currentEvents.map(event => <li key={event.id}><span className="event-marker"/><div><b>{event.detail}</b><small>{event.phase} · {dateTime(event.created_at)}</small></div><span className={`mini-status ${statusClass[event.status]}`}>{statusLabel[event.status]}</span></li>)}</ol> : <p className="small-muted">此任務尚無持久事件。</p>}</section>
-                <section className="approval-card glass-panel"><div className="section-title-row compact"><div><div className="eyebrow">EXTERNAL ACTION GATE</div><h3>操作核准</h3></div><span className="channel-lock"><ShieldCheck size={13}/>{detail.approvals.length} 項</span></div>{detail.approvals.length ? <div className="approval-list">{detail.approvals.map(approval => <article className="approval-item" key={approval.id}><div className="approval-heading"><b>{approval.action}</b><span className={`approval-status ${approval.status}`}>{approval.status === 'pending' ? '等待確認' : approval.status === 'approved' ? '已核准（只記錄）' : approval.status === 'rejected' ? '已拒絕' : approval.status === 'expired' ? '已過期' : '已消耗'}</span></div><p className="small-muted">精確參數（核准會比對 SHA-256；逾期不可核准）</p><pre className="approval-payload">{JSON.stringify(approval.payload, null, 2)}</pre><code className="approval-hash">SHA-256 · {approval.payload_hash}</code><small className="approval-expiry">到期：{dateTime(approval.expires_at)}</small>{approval.status === 'pending' && <div className="approval-actions"><button className="button secondary mini" onClick={() => decideApproval(approval, 'reject')} disabled={busy || STATIC_PREVIEW}>拒絕此動作</button><button className="button primary mini" onClick={() => decideApproval(approval, 'approve')} disabled={busy || STATIC_PREVIEW}>確認核准精確 payload</button></div>}</article>)}</div> : <p className="small-muted">目前沒有待核准操作。此版本不會自動提出外部操作，也沒有外部執行器。</p>}</section>
-              </>}
+          {!hasWebGPU() && <div className="notice notice-warn"><CircleHelp size={17} /><span>此裝置未回報 WebGPU。此網站不會切換到遠端模型；可檢視工作台，但需支援 WebGPU 的瀏覽器才能執行本機推理。</span></div>}
+          {storageError && <div className="notice notice-error" role="alert"><CircleHelp size={17} /><span>本機資料儲存不可用：{storageError}</span></div>}
+          {operationError && <div className="notice notice-error" role="alert"><CircleHelp size={17} /><span>{operationError}</span><button type="button" className="tiny-icon" onClick={() => setOperationError('')} aria-label="關閉訊息"><X size={15} /></button></div>}
 
-              <section className="composer-card glass-panel"><div className="composer-label"><span><Sparkles size={14}/>開始或追問</span><span className="composer-limit">{STATIC_PREVIEW ? '預覽模式 · 輸入與執行已停用' : '至少 8 個字 · 不會在 AI 未就緒時執行'}</span></div><form onSubmit={submitResearch}><textarea id="research-input" value={composer} onChange={e => setComposer(e.target.value)} placeholder={STATIC_PREVIEW ? '此靜態頁不會讀取或儲存研究輸入。' : activeConversationId ? '補充研究問題或建立新的研究任務…' : '輸入研究問題，例如：比較三種公開資料來源的更新頻率與限制…'} rows={3} aria-label="研究問題" disabled={STATIC_PREVIEW}/><div className="composer-footer"><label className="agent-picker"><Bot size={14}/><span>使用個人 Agent</span><select value={selectedAgent} onChange={e => setSelectedAgent(e.target.value)} aria-label="選用個人 Agent" disabled={STATIC_PREVIEW}><option value="">未選擇</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}（v{agent.version}）</option>)}</select></label><button className="button primary" type="submit" disabled={STATIC_PREVIEW || busy || composer.trim().length < 8}><span>{STATIC_PREVIEW ? '後端未部署' : busy ? '記錄中…' : '建立研究任務'}</span><Send size={14}/></button></div></form></section>
+          <div className="task-overview">
+            <div className="task-title-row"><div><div className="eyebrow muted">目前對話</div><h2>{activeConversation?.title || '尚未建立對話'}</h2></div>{activeTask && <div className={`status-badge ${statusClass[activeTask.status]}`}><span />{statusLabel[activeTask.status]}</div>}</div>
+            {activeTask ? <div className="task-meta"><span><Activity size={14} /> 階段：{activeTask.phase}</span><span><UsersRound size={14} /> {activeTask.agentSnapshot.name} · 單一模型的角色視角</span><span>更新：{displayDate(activeTask.updatedAt)}</span>{(activeTask.status === 'failed' || activeTask.status === 'cancelled' || (activeTask.status === 'waiting for user' && taskClaims.length === 0)) && <button className="text-button" type="button" onClick={() => retryTask(activeTask)}><Send size={13} /> 載入原問題以建立新任務</button>}</div> : <p className="muted-text">建立對話並提出問題；任務會從真實模型呼叫更新狀態，不顯示虛構百分比。</p>}
+          </div>
+
+          {conversationTasks.length > 0 && <div className="task-tabs" role="tablist" aria-label="此對話的研究任務">{conversationTasks.slice(0, 5).map(task => <button key={task.id} type="button" role="tab" aria-selected={activeTask?.id === task.id} className={activeTask?.id === task.id ? 'active' : ''} onClick={() => setActiveTaskId(task.id)}><span className={`tab-dot ${statusClass[task.status]}`} />{task.title}</button>)}</div>}
+
+          {showAgentForm && agentDraft && <section className="editor-card" aria-label="Agent 編輯器"><div className="section-header"><div><div className="eyebrow muted">個人 Agent 設定</div><h3>{data.agents.some(item => item.id === agentDraft.id) ? '編輯 Agent' : '新增 Agent'}</h3></div><button className="icon-button" type="button" aria-label="關閉 Agent 編輯器" onClick={() => { setShowAgentForm(false); setAgentDraft(null); }}><X size={17} /></button></div><form className="stack-form" onSubmit={saveAgent}><label>名稱<input required maxLength={80} value={agentDraft.name} onChange={event => setAgentDraft({ ...agentDraft, name: event.target.value })} /></label><label>角色<input required maxLength={120} value={agentDraft.role} onChange={event => setAgentDraft({ ...agentDraft, role: event.target.value })} /></label><label>工作指示<textarea required rows={4} maxLength={3000} value={agentDraft.instructions} onChange={event => setAgentDraft({ ...agentDraft, instructions: event.target.value })} /></label><div className="form-actions"><button className="button button-light" type="submit"><Check size={15} /> 儲存版本</button>{agentDraft.id !== 'builtin-research-lead' && data.agents.some(item => item.id === agentDraft.id) && <button className="text-button danger-text" type="button" onClick={() => setDeleteTarget({ kind: 'agent', id: agentDraft.id, label: agentDraft.name })}><Trash2 size={14} /> 刪除 Agent</button>}</div></form></section>}
+
+          {showSourceForm && <section className="editor-card" aria-label="來源片段登錄"><div className="section-header"><div><div className="eyebrow muted">人工提供來源</div><h3>登錄一段已閱讀的來源</h3></div><button className="icon-button" type="button" aria-label="關閉來源表單" onClick={() => setShowSourceForm(false)}><X size={17} /></button></div><p className="muted-text">目前不會自動搜尋或抓取網址。請貼上原文片段；URL、標題與定位都由你提供。每段最多 900 字；每個任務最多帶入最近的 5 段，適配小模型 context。</p><form className="stack-form" onSubmit={addSource}><label>來源標題<input required maxLength={240} value={sourceDraft.title} onChange={event => setSourceDraft({ ...sourceDraft, title: event.target.value })} /></label><label>HTTP(S) URL<input required type="url" placeholder="https://…" value={sourceDraft.url} onChange={event => setSourceDraft({ ...sourceDraft, url: event.target.value })} /></label><label>原文片段<textarea required rows={5} maxLength={900} value={sourceDraft.excerpt} onChange={event => setSourceDraft({ ...sourceDraft, excerpt: event.target.value })} /></label><label>段落／頁碼定位（可留空）<input maxLength={200} value={sourceDraft.locator} onChange={event => setSourceDraft({ ...sourceDraft, locator: event.target.value })} /></label><div className="form-actions"><button className="button button-light" type="submit"><FilePlus2 size={15} /> 儲存來源片段</button><span className="micro-copy">只存入此瀏覽器與目前對話；既有任務來源快照不變</span></div></form></section>}
+
+          {!activeTask && !showAgentForm && !showSourceForm && <section className="empty-state"><img src={`${ASSET_BASE}11_empty_state.png`} alt="黑白灰研究節點概念圖" /><div className="empty-copy"><span className="eyebrow muted">從一個可回答的問題開始</span><h2>先建立清楚問題，再決定需要哪些證據。</h2><p>這裡不會預先塞入示範研究、引用或代理回報。你新增的資料只存在目前瀏覽器。</p><button className="button button-light" type="button" onClick={createConversation}><Plus size={16} /> 建立第一個對話</button></div></section>}
+
+          {activeTask && <>
+            <section className="group-chat" aria-label="任務代理群聊"><div className="section-header"><div><div className="eyebrow muted">任務群聊 · 實際推理紀錄</div><h3>角色分工與訊息順序</h3></div><span className="single-model-note"><Radio size={13} /> 同一個本機模型 · 依序生成</span></div><div className="roles-row"><div><img src={`${ASSET_BASE}02_planner_avatar.png`} alt="" /><span>Planner<small>拆解問題</small></span></div><ArrowDownRight size={15} /><div><img src={`${ASSET_BASE}03_researcher_avatar.png`} alt="" /><span>Researcher<small>讀取貼上的片段</small></span></div><ArrowDownRight size={15} /><div><img src={`${ASSET_BASE}04_reviewer_avatar.png`} alt="" /><span>Reviewer<small>檢查 ID／整理候選</small></span></div></div><div className="message-list" aria-live="polite">
+              {taskMessages.map(message => <article key={message.id} className={`message-card ${message.speaker}`}><div className="message-avatar">{message.speaker === 'user' ? '你' : <img src={`${ASSET_BASE}${message.role === 'Planner' ? '02_planner_avatar.png' : message.role === 'Researcher' ? '03_researcher_avatar.png' : '04_reviewer_avatar.png'}`} alt="" />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === '使用者' ? '使用者' : `${message.role} · ${activeTask.agentSnapshot.name}`}</strong><time>{displayDate(message.createdAt)}</time></div><p>{message.body}</p>{message.speaker === 'agent' && <small className="unverified-note">模型生成 · 未經語義驗證</small>}</div></article>)}
+              {currentStreaming && <article className="message-card agent streaming-card"><div className="message-avatar"><img src={`${ASSET_BASE}${currentStreaming.role === 'Planner' ? '02_planner_avatar.png' : currentStreaming.role === 'Researcher' ? '03_researcher_avatar.png' : '04_reviewer_avatar.png'}`} alt="" /></div><div className="message-content"><div className="message-meta"><strong>{currentStreaming.role} · 正在本機生成</strong><LoaderCircle size={14} className="spin" /></div><p>{currentStreaming.body || '模型已開始生成，等待第一個 token…'}</p></div></article>}
+              {taskMessages.length === 0 && !currentStreaming && <div className="quiet-empty">尚無群聊訊息；尚未執行模型。</div>}
+            </div></section>
+
+            <section className="report-section"><div className="section-header"><div><div className="eyebrow muted">研究短報告草稿</div><h3>候選主張與來源追溯</h3></div><span className="unverified-chip"><ShieldCheck size={13} /> 人工核對前均未驗證</span></div>
+              {activeTask.blockedReason && <div className="notice notice-warn compact"><CircleHelp size={16} /><span>{activeTask.blockedReason}</span></div>}
+              {taskClaims.length === 0 ? <div className="quiet-empty">目前沒有可展示的候選主張。{activeTask.status === 'waiting for user' ? '請新增來源片段或調整問題後重跑。' : '來源或模型輸出尚未完成。'}</div> : taskClaims.map(claim => <article key={claim.id} className="claim-card"><div className="claim-label"><span>{claimLabel[claim.kind]}</span><span className={claim.reviewedAt ? 'verified-chip' : 'unverified-chip'}>{claim.reviewedAt ? '已由使用者標記核對' : '待人工核對'}</span></div><p>{claim.text}</p>{claim.note && <p className="claim-note">核對提醒：{claim.note}</p>}<div className="evidence-links">{claim.evidenceIds.map(id => { const source = data.sources.find(item => item.evidenceId === id); const href = source ? safeHttpUrl(source.url) : null; return source && href ? <a key={id} href={href} target="_blank" rel="noreferrer"><ExternalLink size={13} />{source.title}<span>{source.locator || '使用者貼上片段'}</span></a> : <span key={id} className="error-text">{source ? `來源 URL 不安全或無效：${id}` : `缺少來源記錄：${id}`}</span>; })}</div>{!claim.reviewedAt && activeTask.status === 'waiting for user' && <button className="text-button review-action" type="button" onClick={() => reviewClaim(claim)}><Check size={14} /> 我已開啟原文並核對此主張</button>}</article>)}
+              {(activeTask.gaps.length > 0 || activeTask.conflicts.length > 0) && <div className="gap-grid">{activeTask.gaps.length > 0 && <div className="gap-card"><strong>模型提出的證據缺口 · 待核實</strong>{activeTask.gaps.map((item, i) => <p key={i}>{item}</p>)}</div>}{activeTask.conflicts.length > 0 && <div className="gap-card"><strong>模型指出的可能衝突 · 待核實</strong>{activeTask.conflicts.map((item, i) => <p key={i}>{item}</p>)}</div>}</div>}
             </section>
 
-            <aside className="research-rail" aria-label="研究狀態與代理群聊">
-              <section className="readiness-card glass-panel"><div className="rail-heading"><span className="rail-icon"><ShieldCheck size={15}/></span><div><small>執行準備狀態</small><b>AI 與來源工具</b></div><span className="not-ready-pill"><i/>未就緒</span></div><div className="readiness-body"><p>{STATIC_PREVIEW ? 'GitHub Pages 只提供靜態前端；API、SQLite 與 AI runner 尚未部署。' : readiness?.researchExecution.reason || '正在讀取後端設定。'}</p><div className="readiness-items"><div><span>模型 provider</span><b>{STATIC_PREVIEW ? '後端未部署' : readiness?.provider.ready ? readiness.provider.model : '未設定'}</b></div><div><span>來源搜尋／擷取</span><b>未接通</b></div><div><span>Google OAuth</span><b>{STATIC_PREVIEW ? '此頁沒有登入服務' : readiness?.oauth.configured ? '已設環境值（未驗證同意）' : '佔位，未設定'}</b></div></div><a className="setup-link" id="setup" href="https://github.com/xiaoyu0712-beep/Reasona-AI-Agent/blob/main/README.md" target="_blank" rel="noreferrer">檢視 README 設定步驟 <ArrowUpRight size={13}/></a></div></section>
-              <section className="schedule-card glass-panel"><div className="section-title-row compact"><div><div className="eyebrow">SCHEDULES</div><h3>排程</h3></div><span className="channel-lock"><Clock3 size={13}/>{schedules.length} 項</span></div><div className="schedule-columns"><span>名稱</span><span>下次執行</span><span>上次結果</span></div>{schedules.length ? schedules.map(schedule => <div className="schedule-row" key={schedule.id}><div><b>{schedule.name}</b><small>{schedule.status}</small></div><span>{schedule.next_run_at ? dateTime(schedule.next_run_at) : '未排定'}</span><span>{schedule.last_result || '尚未執行'}</span></div>) : <div className="schedule-empty"><p>排程執行器未接通，沒有已啟用的排程。下次執行與上次結果保持空白，不顯示虛構時間。</p></div>}</section>
-              <section className="group-chat-card glass-panel"><div className="section-title-row compact"><div><div className="eyebrow">TASK CHANNEL</div><h3>代理群聊</h3></div><span className="channel-lock"><UsersRound size={14}/>任務內</span></div><div className="chat-context"><span className="chat-context-icon"><UsersRound size={15}/></span><div><b>{detail?.task.title || '尚無活動任務'}</b><small>訊息只屬於此任務與對話</small></div><div className="agent-illustrations" aria-label="Planner、Researcher、Reviewer 角色插圖；非即時執行狀態">{referenceAssets.slice(1, 4).map(([file, name]) => <img key={file} src={assetUrl(file)} alt={`${name} 角色插圖；非即時執行狀態`} loading="lazy"/>)}</div></div><p className="illustration-note">角色圖片僅為視覺素材，不表示目前有代理正在執行。</p>{detail?.subtasks?.length ? <div className="subtask-list">{detail.subtasks.map(subtask => <div className="subtask-row" key={subtask.id}><span className="event-marker"/><span><b>{subtask.title}</b><small>{subtask.agent_snapshot ? `${subtask.agent_snapshot.name} · v${subtask.agent_snapshot.version}` : '未指派 Agent'} · {subtask.phase}</small></span><em>{statusLabel[subtask.status]}</em></div>)}</div> : <p className="subtask-empty">子代理分工尚未建立。AI runner 未就緒；此處沒有虛構的子任務或代理回報。</p>}
-                {!groupMessages.length ? <div className="chat-empty"><div className="chat-empty-icon"><MessageSquareText size={16}/></div><p>尚無群聊訊息。模型未就緒，因此沒有代理回報或代理發言。</p></div> : <div className="group-messages">{groupMessages.map(message => <article key={message.id} className={`message-row ${message.speaker_type}`}><span className="message-avatar">{message.speaker_type === 'user' ? <UserRound size={13}/> : <Bot size={13}/>}</span><div><div className="message-author">{message.speaker_type === 'user' ? '你' : message.speaker_type === 'agent' ? 'Agent' : '系統'}<time>{dateTime(message.created_at)}</time></div><p>{message.body}</p></div></article>)}</div>}
-                <form className="chat-composer" onSubmit={sendGroupMessage}><input value={chatDraft} onChange={e => setChatDraft(e.target.value)} placeholder={STATIC_PREVIEW ? '靜態預覽沒有群聊 API' : activeTaskId ? '在此任務留言…' : '建立任務後可留言'} aria-label="任務群聊訊息" disabled={STATIC_PREVIEW || !activeTaskId}/><button className="icon-button send-small" type="submit" disabled={STATIC_PREVIEW || !activeTaskId || !chatDraft.trim()} aria-label="送出任務訊息"><Send size={14}/></button></form>
-              </section>
-              <section className="integrity-card"><div className="integrity-icon"><ShieldCheck size={14}/></div><p><b>來源誠信</b><span>{factCount} 項來源型主張；全部仍需人工核查。來源記錄不代表其內容已支持主張。</span></p></section>
-              <section className="audit-peek"><div><Activity size={14}/><span>任務稽核</span></div><small>{detail ? `${currentEvents.length} 個持久狀態事件` : '建立任務後顯示事件紀錄'}</small></section>
-            </aside>
-          </div>
-          <section className="asset-gallery glass-panel" aria-labelledby="asset-gallery-title"><div className="section-title-row compact"><div><div className="eyebrow">REFERENCE ARTWORK</div><h3 id="asset-gallery-title">附件視覺素材 · 12 張 PNG</h3></div><span className="counter-pill">12</span></div><p className="small-muted">全數為黑白灰液態玻璃概念草稿，尚非核准品牌或執行狀態。點圖可開啟原始 PNG。</p><div className="asset-grid">{referenceAssets.map(([file, title, description]) => <a className="asset-tile" key={file} href={assetUrl(file)} target="_blank" rel="noreferrer"><img src={assetUrl(file)} alt={title} loading="lazy" decoding="async"/><span><b>{title}</b><small>{description}</small></span></a>)}</div></section>
-          <footer className="workspace-footer"><span>REASONA · 來源密集研究工作台</span><span>未驗證的工作流假設 · 不代表市場驗證</span></footer>
-        </div>
-      </div>
-    </main>
+            <section className="sources-section"><div className="section-header"><div><div className="eyebrow muted">來源記錄</div><h3>本任務使用的使用者來源</h3></div><button className="text-button" type="button" onClick={() => setShowSourceForm(true)}><Plus size={14} /> 新增來源</button></div>{taskSources.length === 0 ? <div className="quiet-empty">本任務建立時沒有可用來源；模型不得用外部知識補成來源事實。</div> : taskSources.map(source => <article key={source.id} className="source-card"><div className="source-icon"><BookOpenText size={17} /></div><div className="source-info">{safeHttpUrl(source.url) ? <a href={safeHttpUrl(source.url)!} target="_blank" rel="noreferrer">{source.title} <ExternalLink size={12} /></a> : <span className="error-text">來源 URL 不安全或無效</span>}<small>{source.url} {source.locator && `· ${source.locator}`}</small><p>{source.excerpt}</p></div></article>)}</section>
 
-    {deleteTarget && <div className="modal-backdrop" role="presentation"><section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><div className="modal-mark danger"><Trash2 size={17}/></div><h2 id="delete-title">刪除這個對話？</h2><p><b>{deleteTarget.title}</b> 及其中的任務、訊息、來源、evidence、主張、核准資料與代理暫存都會被移除。操作稽核紀錄會保留不含正文的 metadata。此操作無法復原。</p><div className="modal-actions"><button className="button secondary" onClick={() => setDeleteTarget(null)}>取消</button><button className="button danger-button" onClick={deleteConversation} disabled={busy}><Trash2 size={14}/>確認刪除整個對話範圍</button></div></section></div>}
-    {agentEditor && <div className="modal-backdrop" role="presentation"><section className="editor-modal" role="dialog" aria-modal="true" aria-labelledby="agent-title"><div className="modal-head"><div><div className="eyebrow">PERSONAL AGENT</div><h2 id="agent-title">{agentEditor === 'new' ? '建立個人 Agent' : '編輯個人 Agent'}</h2></div><button className="icon-button" onClick={() => setAgentEditor(null)} aria-label="關閉"><X size={16}/></button></div><p className="small-muted">設定只會保存供新任務選用；不會自動啟動，也不代表具備資料或工具權限。</p><form onSubmit={saveAgent} className="form-stack"><label>名稱<input name="name" required maxLength={60} defaultValue={typeof agentEditor === 'object' ? agentEditor.name : ''} placeholder="例如：政策研究助理"/></label><label>角色<input name="role" required maxLength={80} defaultValue={typeof agentEditor === 'object' ? agentEditor.role : ''} placeholder="例如：來源核查"/></label><label>簡介<input name="description" required maxLength={240} defaultValue={typeof agentEditor === 'object' ? agentEditor.description : ''} placeholder="描述適用任務"/></label><label>指示<textarea name="instructions" rows={4} required maxLength={4000} defaultValue={typeof agentEditor === 'object' ? agentEditor.instructions : ''} placeholder="說明研究方法與限制；伺服器仍會強制權限邊界。"/></label><div className="modal-actions"><button type="button" className="button secondary" onClick={() => setAgentEditor(null)}>取消</button><button className="button primary" type="submit">儲存設定 <Check size={14}/></button></div></form></section></div>}
-    {sourceEditor && <div className="modal-backdrop" role="presentation"><section className="editor-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><div className="modal-head"><div><div className="eyebrow">SOURCE REGISTER</div><h2 id="source-title">加入來源</h2></div><button className="icon-button" onClick={() => setSourceEditor(false)} aria-label="關閉"><X size={16}/></button></div><p className="small-muted">只記錄 HTTPS 來源 URL 與你提供的標題；尚未抓取、開啟或驗證。</p><form onSubmit={addSource} className="form-stack"><label>來源標題<input required maxLength={300} value={sourceDraft.title} onChange={e => setSourceDraft({ ...sourceDraft, title: e.target.value })}/></label><label>具體頁面 URL<input type="url" required placeholder="https://…" value={sourceDraft.url} onChange={e => setSourceDraft({ ...sourceDraft, url: e.target.value })}/></label><div className="modal-actions"><button type="button" className="button secondary" onClick={() => setSourceEditor(false)}>取消</button><button className="button primary" type="submit">記錄來源 <Plus size={14}/></button></div></form></section></div>}
-    {claimEditor && <div className="modal-backdrop" role="presentation"><section className="editor-modal" role="dialog" aria-modal="true" aria-labelledby="claim-title"><div className="modal-head"><div><div className="eyebrow">CLAIM TRACE</div><h2 id="claim-title">記錄研究主張</h2></div><button className="icon-button" onClick={() => setClaimEditor(false)} aria-label="關閉"><X size={16}/></button></div><p className="small-muted">主張會標為未經核查。事實主張需至少連結一段本任務來源 evidence；系統不會替你斷言來源支持程度。</p><form onSubmit={addClaim} className="form-stack"><label>主張類型<select value={claimDraft.kind} onChange={e => setClaimDraft({ ...claimDraft, kind: e.target.value as Claim['kind'] })}>{Object.entries(kindLabel).map(([key, value]) => <option key={key} value={key}>{value}</option>)}</select></label><label>主張內容<textarea rows={3} required maxLength={3000} value={claimDraft.text} onChange={e => setClaimDraft({ ...claimDraft, text: e.target.value })}/></label>{claimDraft.kind !== 'uncertainty' && <fieldset className="evidence-picker"><legend>連結 evidence span</legend>{(detail?.sources || []).flatMap(source => (source.evidence || []).map(evidence => <label className="evidence-check-row" key={evidence.id}><input type="checkbox" checked={claimDraft.evidenceIds.includes(evidence.id)} onChange={e => setClaimDraft(prev => ({ ...prev, evidenceIds: e.target.checked ? [...prev.evidenceIds, evidence.id] : prev.evidenceIds.filter(id => id !== evidence.id) }))}/><span><b>{source.title}</b><small>{evidence.locator || '來源段落'}：{evidence.excerpt}</small></span></label>))}{!(detail?.sources || []).some(source => source.evidence?.length) && <p className="small-muted">尚無 evidence span。先在來源列使用「加入摘錄」。</p>}</fieldset>}<div className="modal-actions"><button type="button" className="button secondary" onClick={() => setClaimEditor(false)}>取消</button><button className="button primary" type="submit">保存主張 <Check size={14}/></button></div></form></section></div>}
-  </div>;
+            <details className="audit-details"><summary><Activity size={15} /> 任務狀態事件與稽核紀錄 <ChevronDown size={15} /></summary><ol>{activeTask.events.map(item => <li key={item.id}><time>{displayDate(item.createdAt)}</time><b>{statusLabel[item.status]}</b><span>{item.phase}</span><small>{item.detail}</small></li>)}{data.auditEvents.filter(item => item.entityId === activeTask.id).map(item => <li key={item.id}><time>{displayDate(item.at)}</time><b>audit</b><span>{item.action}</span></li>)}</ol></details>
+          </>}
+
+          <section className="composer-panel"><div className="composer-topline"><div><strong>研究問題</strong><span>適合拆成可由來源片段支持的短報告</span></div><label className="agent-picker"><span>使用 Agent</span><select value={activeAgent?.id || ''} onChange={event => setSelectedAgentId(event.target.value)}>{data.agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name} · {agent.role}</option>)}</select></label></div><div className="source-count-row"><span><BookOpenText size={14} /> 此對話已登錄 {conversationSources.length} 段來源片段</span><button type="button" className="text-button" disabled={!activeConversation} title={!activeConversation ? '請先建立對話' : '貼上來源片段'} onClick={() => setShowSourceForm(value => !value)}><FilePlus2 size={14} /> {showSourceForm ? '關閉來源表單' : '貼上來源'}</button></div><form className="composer-form" onSubmit={event => void submitTask(event)}><textarea id="research-prompt" rows={3} maxLength={2000} placeholder="例如：比較兩份來源對研究限制的描述，指出直接支持的事實、差異與尚缺證據。" value={prompt} onChange={event => setPrompt(event.target.value)} disabled={modelState !== 'ready' || runBusy} aria-label="輸入研究問題" /><div className="composer-actions"><span className="micro-copy">{prompt.length}/2000 · 本機推理，不會自動搜尋網路</span><div>{activeTask?.status === 'running' && <button type="button" className="button button-quiet" onClick={() => void cancelRun()}><X size={14} /> 取消</button>}<button type="submit" className="button button-dark" disabled={modelState !== 'ready' || runBusy || prompt.trim().length < 8}><Send size={15} />{runBusy ? '本機角色流程進行中' : '以本機模型開始'}</button></div></div></form><div className="composer-footnote"><LockKeyhole size={13} /> 未載入模型前不能執行。三個角色由同一個模型依序生成，不是獨立代理服務。</div></section>
+        </main>
+
+        <aside className="right-rail" aria-label="研究設定與狀態"><section className="rail-card model-card"><div className="rail-kicker"><Cpu size={14} /> LOCAL MODEL</div><h3>{MODEL_DISPLAY_NAME}</h3><p>WebLLM · WebGPU · 4k context config</p><div className="model-spec"><span>模型權重</span><b>約 {modelWeightMiB} MiB</b><span>目標 VRAM</span><b>約 1.4 GiB</b><span>授權提示</span><b>需核對衍生權重</b></div><a className="rail-link" href={MODEL_CARD_URL} target="_blank" rel="noreferrer">Qwen3 base model card <ArrowUpRight size={14} /></a><p className="small-warning">Base model 標示 Apache-2.0；MLC 量化 repo 沒有獨立 license 欄位。本程式不重散布權重，正式用途前請先做授權審查。小模型品質未驗證。</p></section>
+          <section className="rail-card"><div className="rail-kicker"><Layers3 size={14} /> EXECUTION BOUNDARY</div><h3>目前沒有外部工具權限</h3><div className="tool-state"><span className="off-dot" /> Web 搜尋／網址擷取 <b>未接通</b></div><div className="tool-state"><span className="off-dot" /> Browser／shell／程式執行 <b>未安裝／停用</b></div><div className="tool-state"><span className="off-dot" /> MCP／第三方外掛 <b>未連接</b></div><div className="tool-state"><span className="off-dot" /> 發送／發布／付款 <b>無執行器</b></div><p className="rail-footnote">任何未來外部工具都須隔離、逐項白名單與明確授權；本頁不能代替權限閘道。</p></section>
+          <section className="rail-card"><div className="rail-kicker"><ShieldCheck size={14} /> APPROVAL GATE</div><h3>高影響操作核准</h3><div className="quiet-empty">未連接外部工具執行器；本機預覽沒有待核准或可執行操作。這不代表未來外部動作已獲授權。</div></section>
+          <section className="rail-card schedule-card"><div className="rail-kicker"><Activity size={14} /> SCHEDULES</div><h3>排程</h3><div className="schedule-head"><span>名稱</span><span>下次執行</span><span>上次結果</span></div><p className="quiet-empty">沒有已設定排程。此靜態網站沒有 scheduler/worker。</p></section>
+          <section className="rail-card privacy-card" id="privacy-panel"><div className="rail-kicker"><ShieldCheck size={14} /> PRIVACY</div><h3>資料留在此瀏覽器</h3><ul><li>IndexedDB 保存 Reasona 工作區資料</li><li>不登入、不雲端同步</li><li>提示與來源不傳至模型 API</li><li>模型權重從 Hugging Face 請求並可能留在瀏覽器 Cache API</li><li>清除工作區不會清掉模型快取；請在瀏覽器網站資料設定另行清除</li><li>分享／匯出未啟用</li></ul><div className="privacy-actions"><span>Google OAuth 尚未設定</span><span>API／SQLite 未部署到 Pages</span></div></section>
+          <details className="rail-card visual-reference"><summary><span className="rail-kicker"><Sparkles size={14} /> PROVIDED VISUALS</span><span>12 張附件 PNG <ChevronDown size={14} /></span></summary><p>這些是使用者提供的設計概念素材，不表示即時代理活動或產品功能。</p><div className="visual-grid">{visualAssets.map(([file, label]) => <figure key={file}><img src={`${ASSET_BASE}${file}`} alt={label} loading="lazy" /><figcaption>{label}</figcaption></figure>)}</div></details>
+        </aside>
+      </div>
+
+      <footer className="app-footer"><span>REASONA · LOCAL RESEARCH STUDIO</span><span>GitHub Pages 僅提供靜態前端；沒有伺服器 API、登入、排程或研究搜尋。</span></footer>
+
+      <AlertDialog.Root open={Boolean(deleteTarget)} onOpenChange={open => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialog.Portal><AlertDialog.Overlay className="dialog-overlay" /><AlertDialog.Content className="confirm-dialog"><div className="dialog-icon"><Trash2 size={19} /></div><AlertDialog.Title className="dialog-title">{deleteTarget?.kind === 'all' ? '確認清除 Reasona 工作區資料' : deleteTarget?.kind === 'agent' ? '確認刪除個人 Agent' : '確認刪除對話'}</AlertDialog.Title><AlertDialog.Description asChild><p className="dialog-description">{deleteTarget?.kind === 'all' ? '將永久刪除此瀏覽器 IndexedDB 中的 Reasona 對話、任務、來源片段、證據、主張、Agent 設定與稽核記錄。WebLLM 模型權重若已存入瀏覽器 Cache API，不會由此操作刪除；請到瀏覽器網站資料設定另行清除。此動作無法復原。' : deleteTarget?.kind === 'agent' ? `將刪除 Agent「${deleteTarget.label}」設定；既有任務中的 Agent 快照會保留。此動作無法復原。` : `將刪除「${deleteTarget?.label}」及其所有任務、群聊訊息、來源片段與 claims；此本機工作區不保存核准 payload。對話刪除稽核 metadata 會保留。此動作無法復原。`}</p></AlertDialog.Description><div className="dialog-actions"><AlertDialog.Cancel asChild><button className="button button-quiet" type="button">保留</button></AlertDialog.Cancel><AlertDialog.Action asChild><button className="button button-danger" type="button" onClick={() => void deleteConfirmed()}>確認刪除</button></AlertDialog.Action></div></AlertDialog.Content></AlertDialog.Portal>
+      </AlertDialog.Root>
+    </div>
+  );
 }
