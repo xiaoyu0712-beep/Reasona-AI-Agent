@@ -1,0 +1,82 @@
+# Reasona AI：開源 Agent／編排框架與自架推理選型
+
+以低預算、先做 Web 原型、之後可擴展為目標，選型不應按 GitHub 星數排高低。更有決策價值的是：授權是否允許預定的商業模式、能否接本機模型、工具與狀態是否可控、是否有持續維護，以及自架所需服務和硬體。下表盤點 **24 個值得評估或作為淘汰對照的框架**，另比較 7 個推理／API 元件；它們不是排名，也不代表都適合直接採用。
+
+查核日期為 **2026-10-03**。星數及最後程式碼推送日取自 GitHub 公開倉庫資料（[GitHub REST repository API](https://api.github.com/repos/{owner}/{repo})）；星數是當日查詢快照，會變動。最後推送日是活動訊號，不等於完整維護品質審查。每列包含官方倉庫與官方文件連結。下文以 **事實** 標示倉庫／文件明確記載的資料；**推論** 標示基於架構所作的部署負擔與適配判斷；**假設** 標示硬體、負載或原型條件。部署級別是相對估計：低＝可嵌進既有單一應用；中＝通常需持久化、向量儲存或額外服務；高＝平台、GPU 服務或隔離執行環境負擔明顯。
+
+## Agent／編排框架
+
+| 框架與官方來源 | GitHub Stars（10/03） | 語言／主要用途 | 工具、記憶、多 Agent | 授權與商用注意 | 活躍度；部署負擔與風險 |
+|---|---:|---|---|---|---|
+| [LangChain](https://github.com/langchain-ai/langchain) · [官方 Agent 文件](https://docs.langchain.com/oss/python/langchain/agents) | 147,401 | Python；高階 Agent harness、模型與工具整合。 | 工具與 middleware 是一級概念；短期狀態可由 agent state 管理，持久化通常配 LangGraph；可組合多代理，但複雜控制流程落在 LangGraph。 | MIT。 | 推送 2026-10-03。**推論：低至中**；能快速串接，但整合面廣、版本演進快，選用功能時需鎖定版本及測試。 |
+| [LangGraph](https://github.com/langchain-ai/langgraph) · [官方總覽](https://docs.langchain.com/oss/python/langgraph/overview) | 42,661 | Python；低階狀態圖與長流程 Agent runtime。 | 工具可由 LangChain 或自訂元件提供；有 checkpoint、短期／長期記憶與人工介入模式；可用圖節點明確編排多 Agent。 | MIT。 | 推送 2026-10-03。**推論：中**；適合可恢復、可審計流程，但需理解狀態／checkpoint，較不如視覺平台即插即用。 |
+| [CrewAI](https://github.com/crewAIInc/crewAI) · [官方文件](https://docs.crewai.com/) | 59,309 | Python；角色式 crews 與 event-driven flows。 | 官方提供工具、memory、knowledge、guardrails；支援 sequential／hierarchical crews 及多 Agent 協作。 | MIT。 | 推送 2026-10-03。**推論：低至中**；概念直觀，容易做展示；角色、循環與模型呼叫可能增加延遲和推論用量，需限制步數與權限。 |
+| [Microsoft Agent Framework](https://github.com/microsoft/agent-framework) · [官方總覽](https://learn.microsoft.com/en-us/agent-framework/overview/) | 13,905 | Python、.NET/C#；Go 亦有 SDK（文件標示 Go 為 public preview）。 | tools、MCP、session 狀態、context providers／memory；提供 graph 與 functional workflow、多 Agent 編排。 | MIT。 | 推送 2026-10-02。**推論：中**；適合已有 Microsoft/.NET 技術棧者。功能面廣，Go 預覽狀態及快速整併的 API 需在採用前試跑。 |
+| [Semantic Kernel](https://github.com/microsoft/semantic-kernel) · [官方總覽](https://learn.microsoft.com/en-us/semantic-kernel/overview/) | 28,620 | C#、Python、Java；企業應用的 LLM middleware／plugins。 | 透過 plugins/function calling 呼叫既有 API；有 vector store 等記憶相關元件；Agent／流程能力仍在，但 Microsoft 將 Agent Framework 定位為 AutoGen 與 Semantic Kernel 的直接後繼整合方向。 | MIT。 | 推送 2026-10-01；官方概覽頁顯示最後更新 2024-06-24。**推論：中**；適合既有 SK 系統延續，新的跨語言 Agent 專案應比較 MAF 遷移路線。 |
+| [AutoGen](https://github.com/microsoft/autogen) · [官方遷移指南](https://learn.microsoft.com/en-us/agent-framework/migration-guide/from-autogen/) | 61,249 | Python 為主要語言，倉庫另含 .NET；對話式多 Agent 研究框架。 | 有工具、AgentChat、群組對話及 code execution；持久化通常要自行接 runtime／儲存；多 Agent 是核心概念。 | **程式碼 MIT；文件 CC BY 4.0**（倉庫根層 API 顯示 CC-BY-4.0，程式碼另有 LICENSE-CODE）。商業使用需分辨文件與程式碼授權。 | 推送 2026-04-15。**事實：官方 README 標示 Maintenance Mode，不再加新功能，建議新使用者改用 Microsoft Agent Framework。推論：高遷移風險，不建議新產品起步採用。** |
+| [Google ADK](https://github.com/google/adk-python) · [官方文件](https://adk.dev/) | 21,696 | Python；另有 TypeScript、Go、Java、Kotlin 版本。 | 工具、MCP、sessions/context memory；支援子代理、圖式工作流與多 Agent。官方文件表示可接多種模型，包括本機模型；Google Cloud 部署另提供託管選項。 | Apache-2.0。 | 推送 2026-10-03。**推論：中**；多語言覆蓋佳，但需分開驗證每個語言版本的功能成熟度；使用 Google Cloud 託管不是自架零成本。 |
+| [OpenAI Agents SDK（Python）](https://github.com/openai/openai-agents-python) · [官方文件](https://openai.github.io/openai-agents-python/) | 29,822 | Python；輕量 Agent runtime。 | 函式工具、MCP、guardrails、sessions；以 agents-as-tools 和 handoffs 編排多 Agent。可設定 OpenAI-compatible base URL／Chat Completions，但官方指出許多相容端點不支援 Responses API 的全部功能。 | MIT。 | 推送 2026-10-02。**推論：低至中**；易上手、具持久 session adapters；接本機模型需選相容 API 路徑並驗證 feature gaps，不能預設 Responses API 全相容。 |
+| [LlamaIndex](https://github.com/run-llama/llama_index) · [官方 Agent 文件](https://developers.llamaindex.ai/python/framework/use_cases/agents/) | 52,392 | Python；資料處理、RAG 與資料導向 Agent。 | 有大量工具／資料連接器、Agent tools、workflow、memory／索引元件；官方列有 handoff 與多 Agent workflow 範例。 | MIT。 | 推送 2026-10-01。**推論：中**；若產品核心是使用者文件、檢索與引用，適配度高；需控制文件解析、embedding 與向量庫成本，雲端解析服務另計。 |
+| [Haystack](https://github.com/deepset-ai/haystack) · [官方 Agent 文件](https://docs.haystack.deepset.ai/docs/agents) | 26,646 | Python；模組化 RAG、pipeline 與 Agent 編排。 | Agent 有工具、型別化 state、streaming、人工審核；官方支援以 AgentTool 建 coordinator／specialist 多代理。持久化與長期記憶依整合元件配置。 | Apache-2.0。 | 推送 2026-10-02。**推論：中**；資料流程明確且利於測試，需自己組合 pipeline，視覺化程度低於 Dify／Flowise。 |
+| [DSPy](https://github.com/stanfordnlp/dspy) · [官方首頁與指南](https://dspy.ai/) | 38,482 | Python；以結構化簽章與 optimizer 編寫、評估及優化 LLM 程式。 | 有 ReAct/tools、可組合模組；不是以持久記憶或一般多 Agent runtime 為主，對話狀態需外接。 | MIT。 | 推送 2026-10-02。**推論：低至中**；適合把輸出品質變成可評估的開發工作，不是最省事的 Web 編排平台；optimizer 會新增模型呼叫與測試成本。 |
+| [PydanticAI](https://github.com/pydantic/pydantic-ai) · [官方總覽](https://pydantic.dev/docs/ai/overview/) | 20,382 | Python；型別化 Agent、結構化輸出及產品後端。 | 型別化工具、依賴注入、MCP；多代理可透過工具委派、handoff、graph。持久執行可接 Temporal、DBOS、Prefect 等，需自行選儲存／runtime。 | MIT。 | 推送 2026-10-03。**推論：低至中**；適合 API-first 原型和可測試資料契約；持久化不是單靠 agent class 自動得到，仍需配置。 |
+| [smolagents](https://github.com/huggingface/smolagents) · [官方文件](https://huggingface.co/docs/smolagents/en/index) | 29,662 | Python；輕量、可讓 Agent 產生程式碼執行工具的 library。 | 支援 CodeAgent、ToolCallingAgent、MCP 及模型無關接入；可建立階層式多代理。持久記憶／生產狀態需外接。 | Apache-2.0。 | 推送 2026-09-30。**推論：低**（library 本身），但 **執行程式碼風險高**；官方列有 sandbox 執行方式，對外服務不可把不受信任的生成程式直接放在主機權限下執行。 |
+| [Agno](https://github.com/agno-agi/agno) · [官方文件](https://docs.agno.com/) | 42,527 | Python；Agent SDK、runtime 及 agent platform。 | agents、teams、workflows，工具、memory、knowledge；AgentOS 可作 API／MCP server 並提供 UI。 | Apache-2.0。 | 推送 2026-10-03。**推論：中**；由 SDK 到平台較完整，但組件較多，應先估算資料庫、server、監控及更新責任。 |
+| [Mastra](https://github.com/mastra-ai/mastra) · [官方 Agent 文件](https://mastra.ai/docs/agents/overview) | 28,527 | TypeScript；Web／Node.js 產品的 Agent 與 workflow framework。 | tools、memory、workflows、subagents；支援結構化與串流輸出。 | 倉庫 `LICENSE.md`：`ee/` 以外為 Apache-2.0；**Enterprise Features 另採 source-available 授權，不是開源，未有書面合約及有效 license key 不可作 production use 或再散布**。採用時需確認用到哪些功能。 | 推送 2026-10-03。**推論：低至中**；和 TypeScript Web 技術棧相合，先確認功能是否落在 `ee/`，避免 MVP 後才遇到商用授權差異。 |
+| [Vercel AI SDK](https://github.com/vercel/ai) · [官方 Agent 文件](https://ai-sdk.dev/docs/agents/overview) | 27,095 | TypeScript／JavaScript；Web app、UI streaming 及工具循環。 | ToolLoopAgent、tools、runtime context；多代理可組合，但持久記憶和 durable workflow 多由應用自行處理。 | Apache-2.0（官方倉庫 LICENSE）。 | 推送 2026-10-03。**推論：低**；最適合已有 React／Next.js 前端的原型；不是自帶資料庫或完整 agent platform，後端狀態、安全與租戶隔離要自己實作。 |
+| [Dify](https://github.com/langgenius/dify) · [官方文件](https://docs.dify.ai/) · [自架部署](https://docs.dify.ai/en/self-host/deploy/overview) | 157,762 | TypeScript 為主要語言；可視化 AI app、Agentic workflow、RAG 平台。 | 工作流／Agent node、工具與 plugin、knowledge、對話記憶及 API 發布；可在 UI 建流程。 | **Modified Apache-2.0。**官方 LICENSE 允許商用，但未經書面授權不得使用其來源碼營運多租戶環境；使用前端時不可移除／修改 Dify logo 與 copyright。SaaS 產品若每客戶一 workspace，尤其須先作法律確認。 | 推送 2026-10-03。**推論：中至高**；可快速展示，但 Docker Compose 和多服務增加資源／升級負擔；授權條件會直接影響白牌與多租戶產品模式。 |
+| [Flowise](https://github.com/FlowiseAI/Flowise) · [官方 Agentflow V2 文件](https://docs.flowiseai.com/using-flowise/agentflowv2.md) | 55,486 | TypeScript；視覺化 Agentflow／workflow builder。 | Agentflow V2 有工具、memory、shared state、supervisor／worker、多 Agent、人工暫停與 MCP。 | Apache-2.0 適用開源版本；enterprise 目錄及明列檔案採 Commercial License。 | 最後推送 2026-08-13；**GitHub API 標示 archived=true**。**推論：高維護風險**；即使星數高，也不建議把封存狀態忽略後直接當新產品基礎。 |
+| [Letta](https://github.com/letta-ai/letta) · [官方自架文件](https://docs.letta.com/self-hosting/) | 25,014 | GitHub API 未回報單一主要語言；核心是 stateful agent server／SDK。 | 長期記憶與 MemFS 是核心；tools、MCP 可由 SDK／server 接入；擅長持續存在的個別 Agent，複雜多 Agent workflow 不是主要差異化。 | Apache-2.0。 | 推送 2026-09-10。**推論：中至高**；App Server 需持久儲存及 token／資料備份。記憶資料可能含敏感個資，需設保存、刪除、權限與備份政策。 |
+| [CAMEL-AI](https://github.com/camel-ai/camel) · [官方文件](https://docs.camel-ai.org/) | 17,805 | Python；研究型多 Agent framework、workforce、合成資料與環境模擬。 | 官方提供 tools、Societies／Workforce、memory/storage、RAG、Python／shell 等 interpreter。多 Agent 支援是核心。 | Apache-2.0。 | 推送 2026-09-30。**推論：中至高**；功能廣但組件面較大；程式、shell、browser interpreter 應隔離並使用最小權限。 |
+| [MetaGPT](https://github.com/FoundationAgents/MetaGPT) · [官方文件](https://docs.deepwisdom.ai/main/en/guide/get_started/introduction.html) | 70,727 | Python；把產品、架構、專案管理等角色組成軟體公司式多 Agent 流程。 | 角色式 delegation、工具與程式產生／執行；context 以任務與 SOP 為中心，穩定的長期產品記憶需再設計。 | MIT。 | 推送 2026-01-21。**推論：中至高**；適合研究角色協作，不等同穩定的產品 runtime；多步驟會增加延遲和模型用量，需做輸出審核。 |
+| [OpenHands](https://github.com/OpenHands/OpenHands) · [SDK 設計文件](https://docs.openhands.dev/sdk/arch/design) | 89,855 | GitHub 主語言為 TypeScript，另有 Python SDK／服務；軟體工程 coding agent。 | coding tools、conversation state／可恢復執行；sandbox 在 V1 架構中可選；多 Agent 不是其主要通用框架賣點。 | MIT（倉庫主授權；檢查子目錄與依賴授權）。 | 推送 2026-10-03。**推論：高**；產品範圍偏 coding agent，執行 shell／讀寫 repository 需要隔離、權限和工作目錄管理，不宜只為一般聊天產品引入。 |
+| [Langroid](https://github.com/langroid/langroid) · [官方文件](https://langroid.github.io/langroid/) | 4,111 | Python；以 Agent、Task、message routing 為核心的多 Agent framework。 | 原生 task delegation、Pydantic tools；Agent 可接 vector store 作長期記憶；官方明示支援本機與遠端模型。 | MIT。 | 推送 2026-10-03。**推論：低至中**；較輕量且本機模型路徑明確；相較大型平台，生態與人才池較小，需先檢查所需 provider／整合器的近期維護狀況。 |
+| [BeeAI Framework](https://github.com/i-am-bee/beeai-framework) · [官方文件](https://framework.beeai.dev/introduction/welcome) | 3,426 | Python、TypeScript（官方宣稱功能對等）。 | tools、memory、MCP／A2A；可用 decorators／YAML 建動態、限制式、多 Agent workflow。 | Apache-2.0；官方文件稱由 Linux Foundation under open governance。 | 推送 2026-09-28。**推論：低至中**；語言選擇彈性好，但 Stars／周邊範例少於成熟大型專案，先作窄範圍技術驗證。 |
+
+## 自架推理引擎與 API 元件
+
+「OpenAI-compatible」不是完整等價保證：同一個 `/v1/chat/completions` 名稱之下，工具呼叫、JSON schema、vision、Responses API、streaming 與錯誤格式仍可能不同。先驗證應用真正使用的端點和參數，不要只看 SDK 能否連上。GitHub 星數與程式碼推送日同樣是 2026-10-03 的查詢快照，表格依用途分組而非按星數排序。
+
+| 元件與來源 | Stars；主要語言／授權；最後推送 | 官方能力與 API 相容性（事實） | 硬體／部署負擔與風險（推論） |
+|---|---|---|---|
+| [Ollama](https://github.com/ollama/ollama) · [OpenAI 相容文件](https://docs.ollama.com/api/openai-compatibility) · [硬體支援](https://docs.ollama.com/gpu) | 182,086；Go／MIT；2026-10-03 | 本機模型管理器及本機服務。`/v1/chat/completions`、`/v1/completions`、`/v1/responses` 等支援度不同；官方列出 tools、streaming、JSON mode、vision、reasoning，亦明列一些不支援項目，例如 tool_choice、logprobs；Responses 目前為非 stateful。 | CPU 可執行，GPU 支援 NVIDIA、AMD、Apple Metal、Vulkan 等，但需對照官方 GPU 清單／driver。**推論：低**，適合本機開發與小流量驗證；並行請求與 context 會增加記憶體，模型可否完全載入 GPU 是容量限制。 |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) · [官方 server／README](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) | 130,197；C++／MIT；2026-10-03 | GGUF 推論、量化及 OpenAI-compatible `llama-server`。支援 CPU、NVIDIA CUDA、AMD HIP、Apple Metal、Vulkan、SYCL 等，亦可 CPU+GPU hybrid；以本機／單機模型服務為主。 | **推論：低至中**；硬體彈性佳，可降低 GPU VRAM 門檻，但模型格式、量化選擇及不同 backend 參數需自行驗證；對外暴露服務需另加網路隔離與認證。 |
+| [LocalAI](https://github.com/mudler/LocalAI) · [官方網站與文件](https://localai.io/) | 49,369；Go／MIT；2026-10-03 | 提供 OpenAI-compatible 介面，也列出 Anthropic、Ollama 等 API；同一前端可選 llama.cpp、vLLM、SGLang 等後端。官方稱 CPU-first，GPU 可加速。 | CPU、CUDA、ROCm、SYCL、Metal、Vulkan 等範圍廣。**推論：低至中**；很適合把 API 介面和引擎抽象開，但各模型功能依實際 backend；額外抽象層可能使問題定位更複雜。 |
+| [vLLM](https://github.com/vllm-project/vllm) · [OpenAI-compatible server](https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server.html) · [GPU requirements](https://docs.vllm.ai/en/latest/getting_started/installation/gpu.html) | 93,102；Python／Apache-2.0；2026-10-03 | 高吞吐推理／serving engine；官方提供 OpenAI Completions、Chat Completions、Responses、embeddings 等 API（依 model 類型而定）。 | 官方 GPU 文件以 Linux 為主；NVIDIA 要 compute capability 7.5+，也有 AMD ROCm 與 Intel 支援；Apple Silicon 透過社群 vLLM-Metal plugin。**推論：高**；適合有 GPU、要提高併發／吞吐時，對一般低成本筆電原型並非最輕量。官方另警告 API key 不保護所有端點，需 reverse proxy／網路防護。 |
+| [SGLang](https://github.com/sgl-project/sglang) · [OpenAI Completions API](https://docs.sglang.ai/basic_usage/openai_api_completions.html) · [官方文件](https://docs.sglang.ai/) | 36,743；Python／Apache-2.0；2026-10-03 | 面向 production serving 的低延遲／高吞吐框架；官方有 OpenAI 相容 chat/completions，另有 vision、embedding 文件及自有擴充欄位。 | 文件列出 NVIDIA、AMD、Intel、TPU、Ascend 等平台。**推論：高**；優勢在 GPU serving 與叢集，driver、kernel、型號支援及多卡維運需先實測。 |
+| [Text Generation Inference（TGI）](https://github.com/huggingface/text-generation-inference) · [官方文件與維護聲明](https://huggingface.co/docs/text-generation-inference/en/index) | 10,883；Rust／Python／Apache-2.0；2026-03-21 | 有 OpenAI Chat Completions 相容 Messages API、streaming、continuous batching、量化及觀測能力。 | 官方文件明確稱 **maintenance mode**，只接受小型修正／文件更新，並建議新部署看 vLLM、SGLang 或本機引擎。**推論：不建議綠地新產品採用**，除非已有相容系統或特定功能不可替代。 |
+| [LiteLLM](https://github.com/BerriAI/litellm) · [官方 Gateway 文件](https://docs.litellm.ai/docs/) · [LICENSE](https://raw.githubusercontent.com/BerriAI/litellm/main/LICENSE) | 60,078；Python／核心 MIT（`enterprise/` 另有授權）；2026-10-03 | **它是 SDK／API gateway，不是模型推理引擎。**統一多家模型 API 格式；self-host Proxy 提供 OpenAI-compatible gateway、routing、fallback、virtual keys 與成本記錄，能路由至 Ollama、vLLM 等。 | 不需 GPU，因為不負責跑模型；有 gateway 服務、資料庫／金鑰治理等額外維運。**推論：中**；本機單模型原型可能多此一層，模型數、環境或租戶增多後再評估較合宜。 |
+
+## 硬體、相容性與實際運行成本
+
+**事實。** Ollama 與 llama.cpp 可在 CPU 上運行，GPU 加速不是所有本機推理的必要條件；Ollama 官方 FAQ 示範 70B 模型載入約 42 GB 記憶體，並說明多個同時請求會依 context 與並行數增加記憶體需求。[Ollama FAQ](https://docs.ollama.com/faq#how-much-memory-is-required-to-run-a-model) 模型大小、量化、context length、KV cache、vision／工具上下文及同時請求數共同決定實際 RAM／VRAM，不能只用「參數量」推算一個保證值。vLLM 的官方 GPU 文件列有 Linux、Python 版本及 NVIDIA compute capability 7.5+ 等條件；不是把一張一般筆電 GPU 裝上就必然能部署。[vLLM GPU 文件](https://docs.vllm.ai/en/latest/getting_started/installation/gpu.html)
+
+**推論。** 低預算原型可以先用既有電腦，以 CPU 或現有 GPU 跑較小、量化的模型；代價是 token 速度、同時請求能力與可用 context 可能不足。若要穩定供 Web 使用者同時呼叫，需額外測吞吐、延遲、context、模型載入時間及峰值 VRAM。開源推理引擎通常免授權費，不代表總成本為零：本機要算硬體折舊與電費；雲端要算 GPU、CPU、RAM、持久磁碟、網路流量、閒置時段和工程維護。
+
+**公開價格例（不是 Reasona AI 報價）。** [Modal 公開價格頁](https://modal.com/pricing) 在查詢日列 T4 為 US$0.000164/GPU 秒（US$0.5904／小時），A10 為 US$0.000306／秒（US$1.1016／小時）。按純 GPU 時數計算：
+
+- 假設每月使用 160 小時（每個工作日 8 小時、20 天）：T4 約 **US$94.46**；A10 約 **US$176.26**。
+- 假設 30 天全天候預留 720 小時：T4 約 **US$425.09**；A10 約 **US$793.15**。
+
+以上只乘 GPU 時數，**不含** CPU、RAM、volume、egress、區域加價、服務方案費、監控與維運；Modal 價格頁另列這些項目。也不是效能或模型能否塞入該 GPU 的保證。假設流量零星時，按實際運行秒數的 serverless GPU 可能比 24/7 預留便宜；若模型冷啟動、常駐或有穩定大量流量，結果會不同。合理比較應以「實際模型、context、並發及每月使用時數」重算，而不是把 GPU 時價當全包成本。
+
+**OpenAI-compatible 的實作檢查。** 先測 `chat/completions`、串流、工具呼叫、JSON schema／structured output、錯誤回應、停止條件、embedding／vision（若需要），再決定是否把後端互換當成架構保證。Ollama 文件明列相容 API 支援子集；vLLM、SGLang 各有額外參數和 model-template 條件。LiteLLM 可統一上游呼叫，但不會替模型實作不存在的端點。
+
+**商用前另查模型權重。** Agent 框架或推理引擎採 MIT／Apache，不會自動授予模型權重的商用權利。每個 checkpoint／量化版本都要讀其 model card 和 LICENSE；Hugging Face 文件說明模型卡可指定標準或自訂 license。[Hugging Face Model Cards](https://huggingface.co/docs/hub/model-cards) 亦應盤點其資料來源、衍生模型條件及使用限制。
+
+## 依 Reasona AI 目標評估的方式
+
+**特殊授權原文：** [AutoGen LICENSE-CODE（程式碼 MIT）](https://github.com/microsoft/autogen/blob/main/LICENSE-CODE)／[AutoGen LICENSE（文件 CC BY 4.0）](https://github.com/microsoft/autogen/blob/main/LICENSE)；[Dify LICENSE](https://github.com/langgenius/dify/blob/main/LICENSE)；[Flowise LICENSE](https://github.com/FlowiseAI/Flowise/blob/main/LICENSE.md) 與 [Flowise Enterprise LICENSE](https://github.com/FlowiseAI/Flowise/blob/main/packages/server/src/enterprise/LICENSE.md)；[Mastra LICENSE.md](https://github.com/mastra-ai/mastra/blob/main/LICENSE.md) 與 [Mastra EE LICENSE](https://github.com/mastra-ai/mastra/blob/main/ee/LICENSE)。
+
+- **授權先於便利：** 對預定商業模式，先排除未授權多租戶、需 enterprise key 的功能及授權不明的相依部分。Permissive MIT／Apache 核心也須保留著作權／license notices，並逐一審模型授權。
+- **先做單 Agent、可控工具：** 初期不因「多 Agent」而引入成本與失敗面。產品流程可由一般程式碼決定就不必交給模型決定；只有資料檢索、工具選擇或長流程真的需要自主性時再加 Agent。
+- **以資料與流程作決策：** 若產品重心是私有文件 RAG，優先比較 LlamaIndex、Haystack 或 LangGraph；若是 TypeScript UI／streaming，評估 Vercel AI SDK／Mastra；若需要視覺化內部 demo，可試 Dify，但商業多租戶授權是先決條件。
+- **平台特性不能取代產品工程：** 登入、租戶隔離、資料刪除、審計、配額、網路安全、工具權限、備份和可觀測性不會因採用 Agent framework 自動完成。
+
+## 三種可驗證的原型組合
+
+1. **既有電腦的低成本 Web 原型：Next.js UI + FastAPI + PydanticAI + Ollama。** 前端／API 分層，先做單 Agent、少量唯讀工具與結構化輸出；Ollama 可用本機 API，亦有 OpenAI 相容子集。若支援功能不夠，再試 llama.cpp server 或 LocalAI。假設單人或少量測試者、可接受 CPU 慢速回應，先不租 GPU。部署負擔低，需自己實作登入、資料庫及 UI。
+2. **快速驗證知識流程：Dify Community + Ollama／LocalAI + 自有小型 Web 前端。** 適合迅速試 RAG 節點、prompt 和 workflow；用 API 接產品 UI，避免直接將管理後台當正式產品。**前提是符合 Dify LICENSE：不能未經書面授權拿來營運多租戶，使用前端時不能移除／更改指定標誌。** 若 Reasona AI 要向不同客戶提供獨立 workspace，先選別的工具或先取得適用授權。
+3. **經驗證後擴展：LangGraph + vLLM（或 SGLang）+ PostgreSQL／checkpoint store + reverse proxy。** LangGraph 管流程／可恢復狀態，GPU serving 後端提供模型 API，API gateway 可待需要時再加。適合要求穩定並發、人工審核與長工作流的階段；初始 GPU 和維運成本較高，不是低流量 MVP 的預設方案。
+
+這些組合是**評估假設**，不是基準測試結果。研究僅以公開官方倉庫、文件、授權文字及公開價格為依據；沒有建立帳戶、登入、呼叫付費 API、複製、建置或執行任何第三方專案。實際選型還要以 Reasona AI 的產品流程、部署地區、資料敏感度、模型授權、流量與預算驗證；本研究不保證產品獲利。
