@@ -9,6 +9,7 @@
 - `frameworks_30_5_15.md`：新附件中的 30 個 Agent、5 個分派框架、15 個工具框架，以及官方來源和單一 runtime 建議。
 - `source_bundle_readme.md`：新版 source bundle 的內容與 45 個 repository snapshot 清單說明。只對 ZIP 中有限 README／LICENSE／manifest 做靜態檢查；未抽取原始碼、執行或安裝。
 - `source_bundle_integration.md`：檔案盤點、素材校驗、metadata-only 檢查及選擇性採用紀錄。
+- `source_framework_audit_2026-10-05.md`：對附件 45 個上游 repository snapshot 的逐項技術、授權線索與 Reasona/GitHub Pages 相容性評估；不是法律意見、供應鏈認證或安裝授權。
 - `SHA256SUMS.txt`：附件原始 manifest，含 45 ZIP 與 12 PNG 的 SHA-256 值；ZIP 本體未放進 repository。
 - `asset_manifest.md`：新版封包 12 張黑白灰 PNG 的來源與用途。
 - `reference_bundle_readme.md`：較早一份參考封包的 README。

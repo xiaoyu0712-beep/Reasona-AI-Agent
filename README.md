@@ -87,4 +87,4 @@ Vite preview 的專案路徑為 `/Reasona-AI-Agent/`。模型下載仍需使用�
 
 ## 參考文件與素材
 
-`docs/reference/` 保存四份模型／技術／Agent 生態／研究流程文件、使用者新附件 `frameworks_30_5_15.md`、來源封包 README、SHA-256 清單與素材 manifest。附件候選列表含 30 個 Agent 框架、5 個分派框架及 15 個工具框架，另列 UI 候選；**本專案只選擇少數相容元件，不把 50 個候選一併安裝或宣稱可用**。對附件 45 個上游 repository ZIP 已在隔離目錄靜態盤點 central directory 與有限 README／license／manifest metadata，但沒有解壓、安裝或執行專案原始碼，也沒有整包塞入 Git；逐項相容性報告尚在處理中，未完成前不宣稱已交付。12 張附件 PNG 在 `apps/web/public/assets/reasona/`，並以原始 SHA-256 與附件核對一致。
+`docs/reference/` 保存四份模型／技術／Agent 生態／研究流程文件、使用者新附件 `frameworks_30_5_15.md`、來源封包 README、SHA-256 清單、素材 manifest 與 [45 項上游 snapshot 逐項稽核](docs/reference/source_framework_audit_2026-10-05.md)。附件候選列表含 30 個 Agent 框架、5 個分派框架及 15 個工具框架，另列 UI 候選；**本專案只保留少數相容元件，不把 50 個候選一併安裝或宣稱可用**。45 個上游 repository ZIP 在隔離目錄進行靜態 metadata 盤點；沒有解壓、安裝或執行其專案原始碼，也沒有把大型 ZIP 放入 Git。稽核僅提供技術與授權線索，不是法律或安全保證，亦不授權安裝或啟用候選。12 張附件 PNG 在 `apps/web/public/assets/reasona/`，並以原始 SHA-256 與附件核對一致。
